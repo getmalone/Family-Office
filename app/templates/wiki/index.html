@@ -373,7 +373,7 @@
   </div>
 
   <h3>Entry Point</h3>
-  <pre><code>cd kelly-family-office
+  <pre><code>cd family-office
 uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload</code></pre>
 
   <div class="callout callout-info">
@@ -392,7 +392,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload</code></pre>
     <h2>Project Structure</h2>
   </div>
 
-  <pre><code>kelly-family-office/
+  <pre><code>family-office/
 ├── .env                         # Active configuration (KFO_ prefixed env vars)
 ├── .env.example                 # Template with all available keys
 ├── pyproject.toml               # Package metadata + all dependencies
@@ -1398,7 +1398,7 @@ loss_carryforward = max(0, |net_loss| - 3000)</code></pre>
 
   <h3>update_prices.py — Daily Price Refresh</h3>
   <p>The primary daily maintenance script. Queries all assets with <code>is_publicly_traded=True</code>, skips <code>STABLE_VALUE_SYMBOLS</code>, calls <code>yf.download()</code> for all remaining symbols in a single bulk call, upserts results into <code>asset_prices</code>, and prints a summary.</p>
-  <pre><code>cd kelly-family-office
+  <pre><code>cd family-office
 python3 scripts/update_prices.py
 # Output: "Done. Updated 405/406 prices for 2026-05-16."
 # (CTRA shows as "no data" — manually update via Yahoo Finance lookup)</code></pre>
@@ -1436,7 +1436,7 @@ EOF</code></pre>
 lsof -ti :8001 | xargs kill -9
 
 # Start fresh
-cd kelly-family-office
+cd family-office
 uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload \
   >> /tmp/kfo-server.log 2>&1 &
 

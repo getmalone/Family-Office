@@ -12,7 +12,7 @@ def test_dashboard_loads(test_client):
     """Dashboard page loads successfully."""
     response = test_client.get("/")
     assert response.status_code == 200
-    assert "Kelly Family Office" in response.text
+    assert "Family Office" in response.text
 
 
 def test_portfolio_page_loads(test_client):
