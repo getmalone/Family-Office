@@ -184,20 +184,35 @@ class AnalysisService:
         # Portfolio daily returns
         port_daily = aligned @ w_arr
 
+        # Build a trading-day date index for the aligned window so that
+        # drawdown dates are accurate (return indices ≠ calendar day offsets).
+        # We generate the sequence of trading days that yfinance would have
+        # returned for [start_date, end_date], then take the last min_len.
+        import pandas as pd
+        trading_days = pd.bdate_range(start=str(start_date), end=str(end_date))
+        # bdate_range gives open-interval dates; returns are diff of prices so
+        # there is one fewer return than price point — align to min_len.
+        if len(trading_days) > min_len:
+            trading_days = trading_days[-min_len:]
+
         # Annualized metrics
         port_vol = float(np.std(port_daily) * np.sqrt(252))
         port_mean = float(np.mean(port_daily) * 252)
         sharpe = (port_mean - risk_free_rate) / port_vol if port_vol > 0 else 0.0
 
-        # Max drawdown
+        # Max drawdown — use trading_day index for accurate period labels
         cumulative = np.cumprod(1 + port_daily)
         running_max = np.maximum.accumulate(cumulative)
         drawdowns = (cumulative - running_max) / running_max
         max_dd = float(np.min(drawdowns))
         dd_end_idx = int(np.argmin(drawdowns))
         dd_start_idx = int(np.argmax(cumulative[:dd_end_idx + 1])) if dd_end_idx > 0 else 0
-        dd_start_date = start_date + timedelta(days=dd_start_idx)
-        dd_end_date = start_date + timedelta(days=dd_end_idx)
+        if len(trading_days) > dd_end_idx:
+            dd_start_date = trading_days[dd_start_idx].date()
+            dd_end_date   = trading_days[dd_end_idx].date()
+        else:
+            dd_start_date = start_date + timedelta(days=dd_start_idx)
+            dd_end_date   = start_date + timedelta(days=dd_end_idx)
         dd_period = f"{dd_start_date} to {dd_end_date}"
 
         # Portfolio beta vs SPY
@@ -324,7 +339,14 @@ class AnalysisService:
 
         results: dict[str, np.ndarray | None] = {}
 
-        # First: use DB price history (instant, no network)
+        # First: use DB price history (instant, no network) — but only when
+        # the DB has enough rows to meaningfully cover the requested lookback.
+        # ~70% of calendar days are trading days, so require at least 60% coverage
+        # (e.g. for a 252-day window, require ≥150 rows).  Anything shorter means
+        # the DB is still being built and yfinance will give far better data.
+        calendar_days = max(1, (end_date - start_date).days)
+        min_rows_required = max(30, int(calendar_days * 0.60))
+
         from app.models.asset import Asset as AssetModel
         db_assets = {
             a.symbol: a.id
@@ -344,7 +366,7 @@ class AnalysisService:
                 .order_by(AssetPrice.price_date)
                 .all()
             )
-            if len(prices_rows) >= 10:
+            if len(prices_rows) >= min_rows_required:
                 prices = np.array([float(p.close_price) for p in prices_rows])
                 rets = np.diff(prices) / prices[:-1]
                 # Sanity-check: if any single-day return exceeds ±99%, the DB
