@@ -86,7 +86,7 @@ The core philosophy is _human-in-the-loop for material decisions, AI for everyth
 ### Entry Point
 
 ```bash
-cd kelly-family-office
+cd family-office
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -95,7 +95,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ## 03 Project Structure
 
 ```
-kelly-family-office/
+family-office/
 ├── .env                         # Active configuration (KFO_ prefixed env vars)
 ├── .env.example                 # Template with all available keys
 ├── pyproject.toml               # Package metadata + all dependencies
@@ -982,7 +982,7 @@ Upsert AssetPrice for today
 The primary daily maintenance script. Queries all assets with `is_publicly_traded=True`, skips `STABLE_VALUE_SYMBOLS`, calls `yf.download()` for all remaining symbols in a single bulk call, upserts results into `asset_prices`, and prints a summary.
 
 ```bash
-cd kelly-family-office
+cd family-office
 python3 scripts/update_prices.py
 # Output: "Done. Updated N/N prices for YYYY-MM-DD."
 # Delisted or illiquid tickers may show "no data" — update manually (see below)
@@ -1023,7 +1023,7 @@ EOF
 lsof -ti :8000 | xargs kill -9
 
 # Start fresh
-cd kelly-family-office
+cd family-office
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload \
   >> /tmp/fo-server.log 2>&1 &
 
