@@ -854,6 +854,8 @@ class AnalysisService:
         withdrawal_final_p10     = None
         withdrawal_final_p90     = None
         portfolio_survival_rate  = None
+        go_go_yrs   = 0
+        slow_go_yrs = 0
 
         if withdrawal_rate > 0 and withdrawal_years > 0:
             # Per-simulation annual withdrawal: constant dollar amount based on
