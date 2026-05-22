@@ -87,10 +87,8 @@ The core philosophy is _human-in-the-loop for material decisions, AI for everyth
 
 ```bash
 cd kelly-family-office
-uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-
-> **Note:** The default port in `config.py` is **8000**; the team runs on **8001** to avoid conflicts with other local services. Pass `--port 8001` or set `KFO_PORT=8001` in `.env`.
 
 ---
 
@@ -168,12 +166,9 @@ kelly-family-office/
 │       ├── approvals/           # 2 templates
 │       └── analysis/            # 7 templates + _subnav partial
 ├── scripts/
-│   ├── update_prices.py         # Bulk yfinance price refresh (run daily)
-│   ├── update_schwab_000.py     # Import Schwab ...000 account CSV positions
-│   ├── update_schwab_645.py     # Import Schwab ...645 account CSV positions
-│   ├── update_schwab_912.py     # Import Schwab ...912 account CSV positions
-│   ├── update_fidelity.py       # Import Fidelity account positions
-│   └── update_529.py            # Import 529 plan positions
+│   ├── seed_demo_data.py        # Populate DB with fictional demo data
+│   └── update_prices.py         # Bulk yfinance price refresh (run daily)
+├── private/                     # gitignored — account-specific import scripts live here
 ├── tests/
 │   └── test_services/           # pytest unit tests for service layer
 └── data/
@@ -191,7 +186,7 @@ The `.env` file path is resolved **absolutely** using `Path(__file__).parent.par
 | Setting | Env Var | Default | Notes |
 |---------|---------|---------|-------|
 | `db_path` | `KFO_DB_PATH` | `data/family_office.db` | Relative to project root |
-| `db_passphrase` | `KFO_DB_PASSPHRASE` | dev-only string | For optional SQLCipher encryption |
+| `db_passphrase` | `KFO_DB_PASSPHRASE` | `""` | For optional SQLCipher encryption |
 | `anthropic_api_key` | `KFO_ANTHROPIC_API_KEY` | `""` | Required for AI features |
 | `openai_api_key` | `KFO_OPENAI_API_KEY` | `""` | Fallback LLM if Anthropic absent |
 | `llm_provider` | `KFO_LLM_PROVIDER` | `anthropic` | |
@@ -200,7 +195,7 @@ The `.env` file path is resolved **absolutely** using `Path(__file__).parent.par
 | `trade_approval_threshold` | `KFO_TRADE_APPROVAL_THRESHOLD` | `50000` | Dollar amount above which trades need approval |
 | `gift_approval_threshold` | `KFO_GIFT_APPROVAL_THRESHOLD` | `18000` | Annual exclusion trigger (2026 IRS limit) |
 | `host` | `KFO_HOST` | `127.0.0.1` | Always bind to loopback |
-| `port` | `KFO_PORT` | `8000` | Team uses 8001 to avoid conflicts |
+| `port` | `KFO_PORT` | `8000` | Override if port 8000 is in use |
 | `field_encryption_key` | `KFO_FIELD_ENCRYPTION_KEY` | `""` | AES key for SSN/account number columns |
 
 ### Minimal .env
@@ -967,9 +962,9 @@ PortfolioService.get_summary()
 ### CSV Import Flow (scripts)
 
 ```
-Schwab / Fidelity exports CSV  (downloaded from brokerage UI)
+Brokerage CSV export  (downloaded from brokerage UI)
   ↓
-scripts/update_schwab_645.py  (account-specific script)
+private/update_<account>.py  (account-specific script, gitignored)
   ↓
 For each position row:
 Close all existing open lots for account  (set is_closed=True)
@@ -989,25 +984,22 @@ The primary daily maintenance script. Queries all assets with `is_publicly_trade
 ```bash
 cd kelly-family-office
 python3 scripts/update_prices.py
-# Output: "Done. Updated 405/406 prices for 2026-05-16."
-# (CTRA shows as "no data" — manually update via Yahoo Finance lookup)
+# Output: "Done. Updated N/N prices for YYYY-MM-DD."
+# Delisted or illiquid tickers may show "no data" — update manually (see below)
 ```
 
 ### Account Import Scripts
 
-Each brokerage account has a dedicated import script that reads a CSV export and rebuilds the position data:
+Each brokerage account has a dedicated import script that reads a CSV export and rebuilds the position data. These scripts live in `private/` (gitignored) since they reference specific account suffixes and file paths. The shared pattern is:
 
-| Script | Account | Source Format |
-|--------|---------|--------------|
-| `update_schwab_000.py` | Schwab ...000 | Schwab CSV position export |
-| `update_schwab_645.py` | Schwab ...645 (Contributory) | Schwab CSV position export |
-| `update_schwab_912.py` | Schwab ...912 | Schwab CSV position export |
-| `update_fidelity.py` | Fidelity accounts | Fidelity CSV + screenshot data |
-| `update_529.py` | 529 plan | 529 plan export |
+1. Parse CSV exported from the brokerage UI
+2. Close all existing open tax lots for the account (`is_closed=True`)
+3. Create a new `Transaction` (BUY) and `TaxLot` for each position row
+4. Upsert today's `AssetPrice` for each symbol
 
 ### Manual Price Update Pattern
 
-When yfinance cannot find a ticker (e.g. delisted CTRA), look up the current price on Yahoo Finance and update directly:
+When yfinance cannot find a ticker (e.g. delisted XYZ), look up the current price on Yahoo Finance and update directly:
 
 ```python
 python3 - <<'EOF'
@@ -1016,7 +1008,7 @@ from app.models.asset import Asset, AssetPrice
 from decimal import Decimal; from datetime import date
 
 factory = get_factory(); db = factory()
-asset = db.query(Asset).filter(Asset.symbol == "CTRA").first()
+asset = db.query(Asset).filter(Asset.symbol == "XYZ").first()
 asset.current_price = Decimal("32.56")
 db.add(AssetPrice(asset_id=asset.id, price_date=date.today(),
                   close_price=Decimal("32.56"), source="manual"))
@@ -1027,16 +1019,16 @@ EOF
 ### Server Management
 
 ```bash
-# Kill existing server on port 8001
-lsof -ti :8001 | xargs kill -9
+# Kill existing server on port 8000
+lsof -ti :8000 | xargs kill -9
 
 # Start fresh
 cd kelly-family-office
-uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload \
-  >> /tmp/kfo-server.log 2>&1 &
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload \
+  >> /tmp/fo-server.log 2>&1 &
 
 # Check startup
-tail -10 /tmp/kfo-server.log
+tail -10 /tmp/fo-server.log
 ```
 
 ---
@@ -1072,7 +1064,7 @@ tail -10 /tmp/kfo-server.log
 | Authentication | None | Add FastAPI session auth (passphrase or OAuth) for multi-user or remote use |
 | Test coverage | Service layer only; API, model, agent tests are stubs | Add `TestClient` fixtures for API layer; mock LangGraph for agent tests |
 | SoftDeleteMixin | Defined but inconsistently applied | Standardize: all models use mixin or explicit `is_active` |
-| CTRA price | Not found by yfinance (possibly delisted) | Manual update from Yahoo Finance; or mark `is_publicly_traded=False` |
+| XYZ price | Not found by yfinance (possibly delisted) | Manual update from Yahoo Finance; or mark `is_publicly_traded=False` |
 
 ---
 
