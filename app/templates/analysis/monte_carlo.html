@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "analysis/_subnav.html" %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Monte Carlo Simulation</h2>
+        <a href="/analysis/" class="text-blue-600 hover:text-blue-800 text-sm">Back to Analysis</a>
+    </div>
+
+    <!-- Controls -->
+    <div class="bg-white shadow rounded-lg p-6 space-y-5">
+
+      {# ── Accumulation phase controls ── #}
+      <div>
+        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Accumulation Phase</div>
+        <form id="mc-form" method="GET"
+              onsubmit="(function(f){
+                  ['goal','monthly_contribution','withdrawal_rate'].forEach(function(n){
+                      var el=f.elements[n]; if(el && !el.value.trim()) el.disabled=true;
+                  });
+              })(this)">
+          <div class="flex flex-wrap items-end gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Accumulation Years</label>
+              <select name="years" class="mt-1 rounded-md border px-3 py-2 text-sm">
+                {% for y in [3, 5, 7, 10, 15, 20] %}
+                <option value="{{ y }}" {% if years == y %}selected{% endif %}>{{ y }} years</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Simulations</label>
+              <select name="simulations" class="mt-1 rounded-md border px-3 py-2 text-sm">
+                {% for s in [500, 1000, 5000, 10000] %}
+                <option value="{{ s }}" {% if simulations == s %}selected{% endif %}>{{ "{:,}".format(s) }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Monthly Deposit ($)</label>
+              <input type="number" name="monthly_contribution"
+                     value="{{ monthly_contribution or '' }}"
+                     min="0" step="500" placeholder="0 — no deposits"
+                     class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Market Regime</label>
+              <select name="regime_override" class="mt-1 rounded-md border px-3 py-2 text-sm"
+                      title="Override the auto-detected Markov regime for Years 1–2 conditioning">
+                <option value="auto"     {% if regime_override in (none, 'auto') %}selected{% endif %}>🔍 Auto (Markov detected)</option>
+                <option value="bull"     {% if regime_override == 'bull'     %}selected{% endif %}>🐂 Bull Market</option>
+                <option value="sideways" {% if regime_override == 'sideways' %}selected{% endif %}>↔ Sideways Market</option>
+                <option value="bear"     {% if regime_override == 'bear'     %}selected{% endif %}>🐻 Bear Market</option>
+                <option value="base"     {% if regime_override == 'base'     %}selected{% endif %}>⬜ No Conditioning</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Goal Amount ($)</label>
+              <input type="number" name="goal" value="{{ goal or '' }}" step="10000" placeholder="Optional"
+                     class="mt-1 rounded-md border px-3 py-2 text-sm w-40">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ── Distribution phase controls ── #}
+      <div class="border-t border-gray-100 pt-4">
+        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+          Distribution / Withdrawal Phase
+          <span class="text-gray-300 font-normal ml-1">— starts immediately after accumulation ends</span>
+        </div>
+        <div class="flex flex-wrap items-end gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Annual Withdrawal Rate (%)</label>
+            <input type="number" name="withdrawal_rate"
+                   value="{{ withdrawal_rate or '' }}"
+                   min="0" max="20" step="0.5" placeholder="e.g. 4.0 — leave blank to skip"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-52">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Distribution Years</label>
+            <select name="withdrawal_years" class="mt-1 rounded-md border px-3 py-2 text-sm">
+              {% for y in [10, 15, 20, 25, 30] %}
+              <option value="{{ y }}" {% if withdrawal_years == y %}selected{% endif %}>{{ y }} years</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Spending Pattern</label>
+            <select name="spending_pattern" id="spending-pattern-sel"
+                    class="mt-1 rounded-md border px-3 py-2 text-sm"
+                    title="Constant: same withdrawal every year. Spending Smile: Go-Go → Slow-Go → No-Go step-downs.">
+              <option value="constant" {% if spending_pattern == 'constant' %}selected{% endif %}>📏 Constant</option>
+              <option value="smile"    {% if spending_pattern == 'smile'    %}selected{% endif %}>😊 Spending Smile</option>
+            </select>
+          </div>
+          {# Smile phase inputs — shown only when Spending Smile is selected #}
+          <div id="smile-opts" class="flex flex-wrap items-end gap-4 {% if spending_pattern != 'smile' %}hidden{% endif %}">
+            <div>
+              <label class="block text-sm font-medium text-gray-700">
+                Slow-Go Rate
+                <span class="text-gray-400 font-normal text-xs ml-1">% of initial</span>
+              </label>
+              <input type="number" name="smile_slow_pct"
+                     value="{{ smile_slow_pct | int }}"
+                     min="0" max="100" step="5"
+                     class="mt-1 rounded-md border px-3 py-2 text-sm w-28">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700">
+                No-Go Rate
+                <span class="text-gray-400 font-normal text-xs ml-1">% of initial</span>
+              </label>
+              <input type="number" name="smile_no_pct"
+                     value="{{ smile_no_pct | int }}"
+                     min="0" max="100" step="5"
+                     class="mt-1 rounded-md border px-3 py-2 text-sm w-28">
+            </div>
+          </div>
+          <button type="submit" form="mc-form"
+                  class="bg-blue-600 text-white rounded-md px-6 py-2 text-sm hover:bg-blue-700 self-end">
+            Run Simulation
+          </button>
+        </div>
+      </div>
+    </div>
+
+    {# ── helper macro: one result card ── #}
+    {% macro result_card(r) %}
+    <div class="bg-white shadow rounded-lg p-6">
+      {# Header #}
+      <div class="flex items-center gap-2 mb-1">
+        <h3 class="font-medium text-gray-900">{{ r.label }}</h3>
+        {% if r.regime_context and r.regime_context != 'Base' %}
+        <span class="text-xs font-semibold px-2 py-0.5 rounded-full
+          {{ 'bg-emerald-100 text-emerald-700' if r.regime_context == 'Bull' else
+             ('bg-red-100 text-red-700'    if r.regime_context == 'Bear' else 'bg-amber-100 text-amber-700') }}">
+          {{ '🐂' if r.regime_context == 'Bull' else ('🐻' if r.regime_context == 'Bear' else '↔') }}
+          {{ r.regime_context }} Regime
+        </span>
+        {% endif %}
+      </div>
+
+      {# Sub-line: starting value + deposits + sims #}
+      <p class="text-sm text-gray-500 mb-4">
+        Starting: <span class="bal font-medium">${{ "{:,.0f}".format(r.initial_value) }}</span>
+        {% if r.monthly_contribution and r.monthly_contribution > 0 %}
+        &nbsp;+&nbsp;<span class="text-blue-600 font-medium">${{ "{:,.0f}".format(r.monthly_contribution) }}/mo</span>
+        <span class="text-gray-400 text-xs">(${{ "{:,.0f}".format(r.monthly_contribution * 12 * r.years) }} total)</span>
+        {% endif %}
+        &nbsp;·&nbsp; {{ r.num_simulations | int }} sims
+        {% if r.regime_context and r.regime_context != 'Base' %}
+        &nbsp;·&nbsp; <span class="text-xs text-gray-400">{{ r.regime_context }} (yrs 1–2)</span>
+        {% endif %}
+      </p>
+
+      {# Accumulation outcome #}
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+        After {{ r.years }}-Year Accumulation
+      </div>
+      <div class="grid grid-cols-3 gap-4 text-center mb-4">
+        <div>
+          <div class="text-xs text-gray-500">Worst (P10)</div>
+          <div class="text-lg font-bold text-red-600"><span class="bal">${{ "{:,.0f}".format(r.final_p10) }}</span></div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">Median</div>
+          <div class="text-lg font-bold text-gray-900"><span class="bal">${{ "{:,.0f}".format(r.final_median) }}</span></div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">Best (P90)</div>
+          <div class="text-lg font-bold text-emerald-600"><span class="bal">${{ "{:,.0f}".format(r.final_p90) }}</span></div>
+        </div>
+      </div>
+
+      {% if r.probability_of_goal is not none %}
+      <div class="mb-4 p-3 bg-gray-50 rounded-md text-center">
+        <span class="text-sm text-gray-600">P(reach <span class="bal">${{ "{:,.0f}".format(r.goal_amount) }}</span>):</span>
+        <span class="text-lg font-bold ml-2
+          {% if r.probability_of_goal >= 70 %}text-emerald-600
+          {% elif r.probability_of_goal >= 40 %}text-amber-600
+          {% else %}text-red-600{% endif %}">
+          {{ r.probability_of_goal }}%
+        </span>
+      </div>
+      {% endif %}
+
+      {# Distribution outcome — only when withdrawal was configured #}
+      {% if r.withdrawal_years > 0 and r.withdrawal_annual_amount is not none %}
+      <div class="border-t border-dashed border-orange-200 pt-4 mt-2">
+        <div class="flex items-center justify-between gap-2 mb-3">
+          <div class="text-xs font-semibold text-orange-600 uppercase tracking-wide">
+            Distribution Phase — {{ r.withdrawal_years }} yrs @ {{ r.withdrawal_rate }}%/yr
+          </div>
+          {% if r.spending_pattern == 'smile' %}
+          <span class="text-xs font-medium text-orange-500 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5">😊 Spending Smile</span>
+          {% endif %}
+        </div>
+
+        {# Spending Smile phase breakdown #}
+        {% if r.spending_pattern == 'smile' and r.smile_go_go_years > 0 %}
+        {% set no_go_years = r.withdrawal_years - r.smile_go_go_years - r.smile_slow_go_years %}
+        <div class="flex gap-0 mb-3 rounded-lg overflow-hidden border border-orange-100 text-xs text-center font-medium">
+          <div class="flex-1 bg-green-50 py-2 px-1 border-r border-orange-100">
+            <div class="text-green-700">🏃 Go-Go</div>
+            <div class="text-gray-500">{{ r.smile_go_go_years }} yrs · 100%</div>
+          </div>
+          <div class="flex-1 bg-amber-50 py-2 px-1 border-r border-orange-100">
+            <div class="text-amber-700">🚶 Slow-Go</div>
+            <div class="text-gray-500">{{ r.smile_slow_go_years }} yrs · {{ r.smile_slow_pct | int }}%</div>
+          </div>
+          <div class="flex-1 bg-orange-50 py-2 px-1">
+            <div class="text-orange-700">🛋 No-Go</div>
+            <div class="text-gray-500">{{ no_go_years }} yrs · {{ r.smile_no_pct | int }}%</div>
+          </div>
+        </div>
+        {% endif %}
+
+        {# Withdrawal amounts #}
+        <div class="grid grid-cols-2 gap-3 text-sm mb-3">
+          <div class="bg-orange-50 rounded-lg p-3">
+            <div class="text-xs text-gray-500 mb-0.5">
+              {% if r.spending_pattern == 'smile' %}Go-Go annual rate (median){% else %}Annual withdrawal (median){% endif %}
+            </div>
+            <div class="font-bold text-orange-700"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_annual_amount) }}</span>/yr</div>
+            <div class="text-xs text-gray-400"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_annual_amount / 12) }}</span>/mo</div>
+          </div>
+          <div class="bg-orange-50 rounded-lg p-3">
+            <div class="text-xs text-gray-500 mb-0.5">Total withdrawn (median)</div>
+            <div class="font-bold text-orange-700"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_total) }}</span></div>
+            <div class="text-xs text-gray-400">over {{ r.withdrawal_years }} years{% if r.spending_pattern == 'smile' %} (smile-adjusted){% endif %}</div>
+          </div>
+        </div>
+        {# End-of-distribution outcomes #}
+        <div class="grid grid-cols-3 gap-3 text-center mb-3">
+          <div>
+            <div class="text-xs text-gray-500">End P10</div>
+            <div class="text-sm font-bold text-red-500"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_final_p10) }}</span></div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500">End Median</div>
+            <div class="text-sm font-bold text-gray-700"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_final_median) }}</span></div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500">End P90</div>
+            <div class="text-sm font-bold text-emerald-600"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_final_p90) }}</span></div>
+          </div>
+        </div>
+        {# Survival rate #}
+        {% if r.portfolio_survival_rate is not none %}
+        <div class="p-3 rounded-lg text-center
+          {% if r.portfolio_survival_rate >= 90 %}bg-emerald-50 border border-emerald-200
+          {% elif r.portfolio_survival_rate >= 70 %}bg-amber-50 border border-amber-200
+          {% else %}bg-red-50 border border-red-200{% endif %}">
+          <div class="text-xs text-gray-500 mb-0.5">Portfolio Survival Rate</div>
+          <div class="text-2xl font-extrabold
+            {% if r.portfolio_survival_rate >= 90 %}text-emerald-600
+            {% elif r.portfolio_survival_rate >= 70 %}text-amber-600
+            {% else %}text-red-600{% endif %}">
+            {{ r.portfolio_survival_rate }}%
+          </div>
+          <div class="text-xs text-gray-400 mt-0.5">
+            {% if r.portfolio_survival_rate >= 90 %}Highly sustainable withdrawal rate
+            {% elif r.portfolio_survival_rate >= 70 %}Moderate depletion risk — consider reducing rate
+            {% else %}High ruin probability — withdrawal rate too aggressive{% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% endmacro %}
+
+    <!-- Accumulation + Distribution result cards -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {{ result_card(result.current) }}
+      {% if result.target %}
+        {{ result_card(result.target) }}
+      {% else %}
+      <div class="bg-white shadow rounded-lg p-6 flex items-center justify-center text-gray-500">
+        <div class="text-center">
+          <p>No target allocation to compare.</p>
+          <a href="/analysis/profiles" class="text-blue-600 hover:text-blue-800 text-sm">Activate a profile</a>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Combined Fan Chart -->
+    <div class="bg-white shadow rounded-lg p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-medium text-gray-900">
+          Portfolio Projection
+          {% if result.current.withdrawal_years > 0 %}
+          — {{ years }}-yr Accumulation + {{ result.current.withdrawal_years }}-yr Distribution
+          {% else %}
+          ({{ years }}-Year)
+          {% endif %}
+        </h3>
+        {% if result.current.withdrawal_years > 0 %}
+        <div class="flex items-center gap-4 text-xs text-gray-400">
+          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-blue-500 inline-block"></span> Accumulation</span>
+          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-orange-400 inline-block"></span> Distribution</span>
+        </div>
+        {% endif %}
+      </div>
+      <div style="height: 420px;">
+        <canvas id="monte-carlo-chart"></canvas>
+      </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ctx = document.getElementById('monte-carlo-chart').getContext('2d');
+const accumYears = {{ years }};
+const currentData = {{ result.current.model_dump_json() | safe }};
+const targetData  = {{ result.target.model_dump_json() | safe if result.target else 'null' }};
+
+const withdrawalYears = currentData.withdrawal_years || 0;
+const totalYears      = accumYears + withdrawalYears;
+
+// ── X-axis labels ─────────────────────────────────────────────────────────────
+const labels = [];
+for (let i = 1; i <= accumYears;   i++) labels.push(`Year ${i}`);
+for (let i = 1; i <= withdrawalYears; i++) labels.push(`Dist. ${i}`);
+
+// ── Helper: build a full-length array, filling the non-phase portion with null ─
+function phaseData(trajectories, field, phaseStart, totalLen) {
+    const out = Array(totalLen).fill(null);
+    trajectories.forEach((t, i) => { out[phaseStart + i] = parseFloat(t[field]); });
+    return out;
+}
+
+const datasets = [];
+
+// ── Current allocation — Accumulation (blue) ──────────────────────────────────
+const cAccum = currentData.trajectories;
+datasets.push({ label: 'Current P10–P90', pointRadius: 0, fill: '+1',
+    backgroundColor: 'rgba(59,130,246,0.10)', borderColor: 'transparent',
+    data: phaseData(cAccum, 'p90', 0, totalYears) });
+datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+    data: phaseData(cAccum, 'p10', 0, totalYears) });
+datasets.push({ label: 'Current P25–P75', pointRadius: 0, fill: '+1',
+    backgroundColor: 'rgba(59,130,246,0.20)', borderColor: 'transparent',
+    data: phaseData(cAccum, 'p75', 0, totalYears) });
+datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+    data: phaseData(cAccum, 'p25', 0, totalYears) });
+datasets.push({ label: 'Current Median', pointRadius: 0, fill: false, tension: 0.3,
+    borderColor: 'rgb(59,130,246)', borderWidth: 2,
+    data: phaseData(cAccum, 'median', 0, totalYears) });
+
+// ── Current allocation — Distribution (orange) ────────────────────────────────
+// withdrawal_trajectories[0] is the retirement *starting* value (= last accum
+// year), so we place it at accumYears-1 to overlap with the blue fan's endpoint.
+// This anchors the orange fan to exactly where the blue fan ends, making the
+// slope change (contributions stop + withdrawals begin) visually obvious.
+if (withdrawalYears > 0 && currentData.withdrawal_trajectories.length) {
+    const cDist = currentData.withdrawal_trajectories;
+    datasets.push({ label: 'Dist. P10–P90', pointRadius: 0, fill: '+1',
+        backgroundColor: 'rgba(251,146,60,0.10)', borderColor: 'transparent',
+        data: phaseData(cDist, 'p90', accumYears - 1, totalYears) });
+    datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+        data: phaseData(cDist, 'p10', accumYears - 1, totalYears) });
+    datasets.push({ label: 'Dist. P25–P75', pointRadius: 0, fill: '+1',
+        backgroundColor: 'rgba(251,146,60,0.20)', borderColor: 'transparent',
+        data: phaseData(cDist, 'p75', accumYears - 1, totalYears) });
+    datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+        data: phaseData(cDist, 'p25', accumYears - 1, totalYears) });
+    datasets.push({ label: 'Dist. Median', pointRadius: 0, fill: false, tension: 0.3,
+        borderColor: 'rgb(251,146,60)', borderWidth: 2, borderDash: [4,3],
+        data: phaseData(cDist, 'median', accumYears - 1, totalYears) });
+}
+
+// ── Target allocation (green) ─────────────────────────────────────────────────
+if (targetData) {
+    const tAccum = targetData.trajectories;
+    datasets.push({ label: 'Target P10–P90', pointRadius: 0, fill: '+1',
+        backgroundColor: 'rgba(16,185,129,0.08)', borderColor: 'transparent',
+        data: phaseData(tAccum, 'p90', 0, totalYears) });
+    datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+        data: phaseData(tAccum, 'p10', 0, totalYears) });
+    datasets.push({ label: 'Target Median', pointRadius: 0, fill: false, tension: 0.3,
+        borderColor: 'rgb(16,185,129)', borderWidth: 2, borderDash: [5,5],
+        data: phaseData(tAccum, 'median', 0, totalYears) });
+
+    if (withdrawalYears > 0 && targetData.withdrawal_trajectories && targetData.withdrawal_trajectories.length) {
+        const tDist = targetData.withdrawal_trajectories;
+        datasets.push({ label: 'Target Dist. Median', pointRadius: 0, fill: false, tension: 0.3,
+            borderColor: 'rgb(5,150,105)', borderWidth: 2, borderDash: [4,3],
+            data: phaseData(tDist, 'median', accumYears - 1, totalYears) });
+    }
+}
+
+// ── Goal line ─────────────────────────────────────────────────────────────────
+{% if goal %}
+datasets.push({
+    label: 'Goal: ${{ "{:,.0f}".format(goal) }}',
+    data: Array(totalYears).fill({{ goal }}),
+    borderColor: 'rgba(239,68,68,0.55)', borderWidth: 1,
+    borderDash: [10,5], pointRadius: 0, fill: false,
+});
+{% endif %}
+
+// ── Inline plugin: dashed vertical line at accumulation/distribution boundary ─
+const phaseLinePlugin = {
+    id: 'phaseLine',
+    afterDraw(chart) {
+        if (!withdrawalYears) return;
+        const xScale = chart.scales.x;
+        const yScale = chart.scales.y;
+        // Draw between accumYears-1 and accumYears (0-indexed) — the gap between last
+        // accumulation label and first distribution label
+        const x = (xScale.getPixelForValue(accumYears - 1) +
+                   xScale.getPixelForValue(accumYears)) / 2;
+        chart.ctx.save();
+        chart.ctx.beginPath();
+        chart.ctx.moveTo(x, yScale.top);
+        chart.ctx.lineTo(x, yScale.bottom);
+        chart.ctx.strokeStyle = 'rgba(107,114,128,0.5)';
+        chart.ctx.lineWidth = 1.5;
+        chart.ctx.setLineDash([6, 4]);
+        chart.ctx.stroke();
+        // Label
+        chart.ctx.fillStyle = 'rgba(107,114,128,0.8)';
+        chart.ctx.font = '11px sans-serif';
+        chart.ctx.textAlign = 'center';
+        chart.ctx.fillText('Retirement', x, yScale.top + 12);
+        chart.ctx.restore();
+    }
+};
+
+new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    plugins: [phaseLinePlugin],
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+            legend: { labels: { filter: item => item.text && item.text !== '' } },
+            tooltip: {
+                callbacks: {
+                    label: c => {
+                        if (!c.dataset.label || c.parsed.y === null) return null;
+                        return `${c.dataset.label}: $${c.parsed.y.toLocaleString(undefined, {maximumFractionDigits: 0})}`;
+                    }
+                }
+            }
+        },
+        scales: {
+            y: { ticks: { callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'K') } }
+        }
+    }
+});
+
+// ── Spending Smile toggle ─────────────────────────────────────────────────────
+(function() {
+    const sel   = document.getElementById('spending-pattern-sel');
+    const opts  = document.getElementById('smile-opts');
+    if (!sel || !opts) return;
+    function sync() { opts.classList.toggle('hidden', sel.value !== 'smile'); }
+    sel.addEventListener('change', sync);
+    sync();
+})();
+</script>
+{% endblock %}

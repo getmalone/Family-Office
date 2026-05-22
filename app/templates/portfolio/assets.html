@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Manage Assets</h2>
+        <a href="/portfolio/" class="text-blue-600 hover:text-blue-800 text-sm">&larr; Back to Portfolio</a>
+    </div>
+
+    <!-- Add Asset Form -->
+    <div class="bg-white shadow rounded-lg p-6">
+        <h3 class="font-medium text-gray-900 mb-4">Add New Asset</h3>
+        <form method="POST" action="/portfolio/assets/add" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Symbol / Ticker</label>
+                <input type="text" name="symbol" placeholder="e.g. AAPL, BTC-USD (blank for private)"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Name</label>
+                <input type="text" name="name" required placeholder="e.g. Apple Inc."
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Asset Class</label>
+                <select name="asset_class" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2">
+                    {% for value, label in asset_classes %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Sector</label>
+                <input type="text" name="sector" placeholder="e.g. Technology, Healthcare"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">CUSIP</label>
+                <input type="text" name="cusip" placeholder="Optional"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2">
+            </div>
+            <div class="flex items-end gap-4">
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-700 pb-2">
+                    <input type="checkbox" name="is_publicly_traded" value="true" checked class="rounded border-gray-300">
+                    Publicly Traded
+                </label>
+                <button type="submit" class="bg-blue-600 text-white rounded-md px-6 py-2 text-sm font-medium hover:bg-blue-700">Add Asset</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Assets Table -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Class</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sector</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Public</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CUSIP</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for a in assets %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ a.symbol or "—" }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700">{{ a.name }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ (a.asset_class | string).replace("_", " ") | title }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ a.sector or "—" }}</td>
+                    <td class="px-4 py-3 text-sm text-center">
+                        {% if a.is_publicly_traded %}
+                        <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Yes</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 font-mono">{{ a.cusip or "—" }}</td>
+                    <td class="px-4 py-3 text-sm text-center">
+                        <a href="/portfolio/assets/edit/{{ a.id }}" title="Edit asset"
+                           class="text-gray-400 hover:text-blue-600 p-1 rounded hover:bg-blue-50 inline-block">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                            </svg>
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

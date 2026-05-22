@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Tax-Loss Harvesting Candidates</h2>
+        <div class="space-x-2">
+            <a href="/tax/summary" class="text-blue-600 hover:text-blue-800 text-sm">Tax Summary</a>
+            <a href="/tax/elections" class="text-blue-600 hover:text-blue-800 text-sm">Elections</a>
+        </div>
+    </div>
+
+    {% if candidates %}
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Account</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Unrealized Loss</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Tax Savings</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Lots</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Term</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Wash Risk</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for c in candidates %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 text-sm font-medium">{{ c.symbol or c.name }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ c.account_name }}</td>
+                    <td class="px-4 py-3 text-sm text-right text-red-600 font-medium"><span class="bal">${{ "{:,.2f}".format(c.total_unrealized_loss) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-right text-green-600 font-medium"><span class="bal">${{ "{:,.2f}".format(c.estimated_tax_savings) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-center">{{ c.num_lots }}</td>
+                    <td class="px-4 py-3 text-sm text-center">{{ "ST" if c.is_short_term else "LT" }}</td>
+                    <td class="px-4 py-3 text-sm text-center">
+                        {% if c.wash_sale_risk %}
+                        <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-700">Yes</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700">No</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white shadow rounded-lg p-8 text-center">
+        <p class="text-gray-500">No tax-loss harvesting candidates found. All positions are at a gain or losses are below the threshold.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

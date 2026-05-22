@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h2 class="text-2xl font-bold text-gray-900">GRAT Simulation</h2>
+
+    <!-- Simulation Form -->
+    <div class="bg-white shadow rounded-lg p-6">
+        <h3 class="font-medium text-gray-900 mb-4">Configure GRAT</h3>
+        <form method="POST" action="/estate/grat/simulate" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Name</label>
+                <input type="text" name="name" value="{{ params.name if params else '' }}" required class="mt-1 block w-full rounded-md border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Grantor</label>
+                <select name="grantor_id" required class="mt-1 block w-full rounded-md border px-3 py-2">
+                    {% for m in members %}<option value="{{ m.id }}">{{ m.full_name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Initial Funding ($)</label>
+                <input type="number" name="initial_funding" step="1000" value="{{ params.initial_funding if params else '1000000' }}" required class="mt-1 block w-full rounded-md border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Term (years)</label>
+                <input type="number" name="term_years" min="1" max="20" value="{{ params.term_years if params else '2' }}" required class="mt-1 block w-full rounded-md border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Section 7520 Rate (%)</label>
+                <input type="number" name="section_7520_rate" step="0.1" value="{{ params.section_7520_rate if params else '5.0' }}" required class="mt-1 block w-full rounded-md border px-3 py-2">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="bg-blue-600 text-white rounded-md px-6 py-2 text-sm hover:bg-blue-700">Run Simulation</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Results -->
+    {% if results %}
+    <div class="bg-white shadow rounded-lg p-6">
+        <h3 class="font-medium text-gray-900 mb-4">Simulation Results — {{ params.name }}</h3>
+        <p class="text-sm text-gray-500 mb-4">
+            Funding: <span class="bal">${{ "{:,.0f}".format(params.initial_funding) }}</span> |
+            Term: {{ params.term_years }} years |
+            7520 Rate: {{ params.section_7520_rate }}%
+        </p>
+
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Growth Rate</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Annual Annuity</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Remainder to Beneficiaries</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Estate Tax Savings</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Effective Transfer %</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for r in results %}
+                    <tr class="{% if r.remainder_value > 0 %}bg-green-50{% endif %}">
+                        <td class="px-4 py-3 text-sm font-medium">{{ r.growth_rate }}%</td>
+                        <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(r.annuity_payment) }}</span></td>
+                        <td class="px-4 py-3 text-sm text-right font-medium {% if r.remainder_value > 0 %}text-green-600{% endif %}">
+                            <span class="bal">${{ "{:,.2f}".format(r.remainder_value) }}</span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-right text-green-600"><span class="bal">${{ "{:,.2f}".format(r.tax_savings_estimate) }}</span></td>
+                        <td class="px-4 py-3 text-sm text-right">{{ r.effective_transfer_pct }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-4 text-sm text-gray-500">
+            Rows in green indicate the trust remainder exceeds zero — wealth transfers to
+            beneficiaries tax-free when asset growth outperforms the Section 7520 hurdle rate.
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

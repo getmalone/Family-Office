@@ -1,0 +1,28 @@
+{# Portfolio sub-navigation — include at top of every portfolio page #}
+<div class="flex items-center gap-1 border-b border-gray-200 pb-0 mb-2 -mt-2">
+  {% set cur = page_title | default('') %}
+  {% for label, href in [
+      ('Holdings',  '/portfolio/'),
+      ('Accounts',  '/portfolio/accounts-view'),
+      ('Trends',    '/portfolio/trends'),
+      ('Trade',     '/portfolio/trade'),
+  ] %}
+  <a href="{{ href }}"
+     class="px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+            {% if (label == 'Holdings'  and cur in ['Portfolio']) or
+                  (label == 'Accounts'  and cur == 'Accounts')   or
+                  (label == 'Trends'    and cur == 'Trends')      or
+                  (label == 'Trade'     and cur == 'New Trade') %}
+              border-blue-600 text-blue-700
+            {% else %}
+              border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300
+            {% endif %}">
+    {{ label }}
+  </a>
+  {% endfor %}
+
+  <div class="ml-auto flex gap-2 pb-1">
+    <a href="/portfolio/assets"   class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">Assets</a>
+    <a href="/portfolio/accounts" class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">Manage Accounts</a>
+  </div>
+</div>

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "portfolio/_subnav.html" %}
+<div class="max-w-2xl mx-auto">
+    <h2 class="text-2xl font-bold text-gray-900 mb-6">New Trade</h2>
+
+    <form method="POST" action="/portfolio/trade" class="bg-white shadow rounded-lg p-6 space-y-4">
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Account</label>
+            <select name="account_id" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 border px-3 py-2">
+                {% for acct in accounts %}
+                <option value="{{ acct.id }}">{{ acct.name }} ({{ acct.institution or acct.account_type.value }})</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Asset</label>
+            <select name="asset_id" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 border px-3 py-2">
+                {% for asset in assets %}
+                <option value="{{ asset.id }}">{{ asset.symbol or asset.name }} - {{ asset.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Action</label>
+            <select name="action" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2">
+                <option value="buy">Buy</option>
+                <option value="sell">Sell</option>
+            </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Quantity</label>
+                <input type="number" name="quantity" step="0.00000001" min="0.00000001" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Price per Unit ($)</label>
+                <input type="number" name="price" step="0.01" min="0.01" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2">
+            </div>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Notes</label>
+            <textarea name="notes" rows="2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border px-3 py-2"></textarea>
+        </div>
+
+        <div class="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-700">
+            Trades exceeding $50,000 require approval before execution.
+        </div>
+
+        <div class="flex gap-3">
+            <button type="submit" class="bg-blue-600 text-white rounded-md px-6 py-2 text-sm font-medium hover:bg-blue-700">Execute Trade</button>
+            <a href="/portfolio/" class="text-gray-600 rounded-md px-6 py-2 text-sm hover:text-gray-900">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

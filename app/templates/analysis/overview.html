@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "analysis/_subnav.html" %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Financial Analysis</h2>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="bg-white overflow-hidden shadow rounded-lg p-5">
+            <div class="text-sm font-medium text-gray-500">Portfolio Volatility</div>
+            <div class="mt-1 text-3xl font-semibold text-gray-900">{{ risk.portfolio_volatility }}%</div>
+            <div class="text-xs text-gray-400">Annualized, {{ risk.lookback_days }}-day</div>
+        </div>
+        <div class="bg-white overflow-hidden shadow rounded-lg p-5">
+            <div class="text-sm font-medium text-gray-500">Sharpe Ratio</div>
+            <div class="mt-1 text-3xl font-semibold {% if risk.sharpe_ratio >= 1 %}text-green-600{% elif risk.sharpe_ratio >= 0 %}text-gray-900{% else %}text-red-600{% endif %}">{{ risk.sharpe_ratio }}</div>
+            <div class="text-xs text-gray-400">Risk-free rate: {{ risk.risk_free_rate | float * 100 }}%</div>
+        </div>
+        <div class="bg-white overflow-hidden shadow rounded-lg p-5">
+            <div class="text-sm font-medium text-gray-500">Max Drawdown</div>
+            <div class="mt-1 text-3xl font-semibold text-red-600">{{ risk.max_drawdown }}%</div>
+            <div class="text-xs text-gray-400">{{ risk.max_drawdown_period }}</div>
+        </div>
+        <div class="bg-white overflow-hidden shadow rounded-lg p-5">
+            <div class="text-sm font-medium text-gray-500">Beta (vs S&P 500)</div>
+            <div class="mt-1 text-3xl font-semibold text-gray-900">{{ risk.beta }}</div>
+            <div class="text-xs text-gray-400">1.0 = market</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Allocation vs Target -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 mb-4">
+                Allocation
+                {% if profile %}<span class="text-sm text-gray-500">vs {{ profile.name }} Target</span>{% endif %}
+            </h3>
+            {% if drift %}
+            <div class="space-y-3">
+                {% for t in drift.targets %}
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">{{ t.asset_class | replace("_", " ") | title }}</span>
+                        <span>
+                            <span class="font-medium">{{ t.current_pct }}%</span>
+                            {% if t.drift_status == "overweight" %}
+                            <span class="text-red-500 text-xs ml-1">+{{ t.drift_pct }}%</span>
+                            {% elif t.drift_status == "underweight" %}
+                            <span class="text-blue-500 text-xs ml-1">{{ t.drift_pct }}%</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="relative w-full bg-gray-200 rounded-full h-3">
+                        <div class="bg-blue-600 h-3 rounded-full absolute" style="width: {{ [t.current_pct | float, 100] | min }}%"></div>
+                        <div class="bg-blue-300 h-3 rounded-full absolute opacity-40" style="width: {{ [t.target_pct | float, 100] | min }}%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-400 mt-0.5">
+                        <span>Target: {{ t.target_pct }}%</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% elif risk.asset_class_risks %}
+            <div class="space-y-3">
+                {% for ac in risk.asset_class_risks %}
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">{{ ac.asset_class | replace("_", " ") | title }}</span>
+                        <span class="font-medium">{{ ac.weight_pct }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ [ac.weight_pct | float, 100] | min }}%"></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500">No positions to analyze.</p>
+            {% endif %}
+        </div>
+
+        <!-- Concentration Risk -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 mb-4">Concentration Risk</h3>
+            <div class="space-y-3 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Largest Position</span>
+                    <span class="font-medium">{{ risk.concentration.largest_position }} ({{ risk.concentration.largest_position_weight_pct }}%)</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Top 5 Positions</span>
+                    <span class="font-medium">{{ risk.concentration.top_5_weight_pct }}%</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Top 10 Positions</span>
+                    <span class="font-medium">{{ risk.concentration.top_10_weight_pct }}%</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">HHI Index</span>
+                    <span class="font-medium">{{ risk.concentration.hhi_index }}</span>
+                </div>
+                <hr>
+                <div class="text-xs text-gray-400">
+                    HHI &lt; 1,500 = diversified | 1,500-2,500 = moderate | &gt; 2,500 = concentrated
+                </div>
+            </div>
+
+            {% if profile %}
+            <div class="mt-6 pt-4 border-t">
+                <h4 class="text-sm font-medium text-gray-700 mb-2">Active Profile</h4>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">{{ profile.name }}</span>
+                    <span class="text-xs text-gray-500">{{ profile.description }}</span>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Quick Links -->
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <a href="/analysis/risk" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">Risk Detail</div>
+            <div class="text-sm text-gray-500">Position-level risk breakdown</div>
+        </a>
+        <a href="/analysis/profiles" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">Profiles</div>
+            <div class="text-sm text-gray-500">Manage target allocations</div>
+        </a>
+        <a href="/analysis/rebalance" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">Rebalance</div>
+            <div class="text-sm text-gray-500">Drift analysis & recommendations</div>
+        </a>
+        <a href="/analysis/monte-carlo" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">Monte Carlo</div>
+            <div class="text-sm text-gray-500">Simulate portfolio projections</div>
+        </a>
+    </div>
+</div>
+{% endblock %}

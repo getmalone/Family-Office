@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{# ── Sub-nav ───────────────────────────────────────────────────────── #}
+{% include "portfolio/_subnav.html" %}
+
+<div class="space-y-6">
+
+  {# ── Header row ───────────────────────────────────────────────────── #}
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-900">Account Overview</h2>
+      <p class="mt-1 text-sm text-gray-500">{{ cards|length }} active accounts &nbsp;·&nbsp; as of today</p>
+    </div>
+    <div class="flex gap-6 text-right">
+      <div>
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Total AUM</div>
+        <div class="text-2xl font-bold text-gray-900"><span class="bal bal-lg">${{ "{:,.0f}".format(total_market_value) }}</span></div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Unrealized P&amp;L</div>
+        <div class="text-2xl font-bold {{ 'text-emerald-600' if total_unrealized_gl >= 0 else 'text-red-600' }}">
+          {{ '+' if total_unrealized_gl >= 0 else '' }}<span class="bal bal-lg">${{ "{:,.0f}".format(total_unrealized_gl) }}</span>
+          <span class="text-base font-medium">({{ '+' if total_unrealized_pct >= 0 else '' }}{{ "{:.1f}".format(total_unrealized_pct) }}%)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Cards grid ───────────────────────────────────────────────────── #}
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+    {% for card in cards %}
+    {% set acct = card.account %}
+    {% set gl_pos = card.unrealized_gl >= 0 %}
+
+    {# Pick header gradient by account type #}
+    {% set atype = acct.account_type | string | lower %}
+    {% if '401k' in atype or 'ira' in atype %}
+      {% set grad = 'from-blue-600 to-indigo-700' %}
+      {% set badge_bg = 'bg-blue-100 text-blue-800' %}
+      {% set type_label = 'Retirement' %}
+    {% elif '529' in atype %}
+      {% set grad = 'from-purple-600 to-purple-800' %}
+      {% set badge_bg = 'bg-purple-100 text-purple-800' %}
+      {% set type_label = '529 Education' %}
+    {% elif 'brokerage' in atype %}
+      {% set grad = 'from-emerald-600 to-teal-700' %}
+      {% set badge_bg = 'bg-emerald-100 text-emerald-800' %}
+      {% set type_label = 'Brokerage' %}
+    {% elif 'checking' in atype or 'savings' in atype or 'bank' in atype %}
+      {% set grad = 'from-slate-500 to-slate-700' %}
+      {% set badge_bg = 'bg-slate-100 text-slate-700' %}
+      {% set type_label = 'Bank' %}
+    {% elif 'trust' in atype %}
+      {% set grad = 'from-amber-500 to-orange-600' %}
+      {% set badge_bg = 'bg-amber-100 text-amber-800' %}
+      {% set type_label = 'Trust' %}
+    {% else %}
+      {% set grad = 'from-gray-600 to-gray-800' %}
+      {% set badge_bg = 'bg-gray-100 text-gray-700' %}
+      {% set type_label = atype | replace('_', ' ') | title %}
+    {% endif %}
+
+    <div class="bg-white rounded-2xl shadow-md overflow-hidden flex flex-col">
+
+      {# Card header #}
+      <div class="bg-gradient-to-br {{ grad }} px-5 py-4 text-white">
+        <div class="flex items-start justify-between">
+          <div class="flex-1 min-w-0 pr-2">
+            <div class="text-xs font-medium text-white/70 uppercase tracking-wider mb-0.5">
+              {{ acct.institution or 'Institution' }}
+            </div>
+            <div class="text-lg font-bold leading-tight truncate" title="{{ acct.name }}">
+              {{ acct.name }}
+            </div>
+          </div>
+          <span class="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-white/20 text-white">
+            {{ type_label }}
+          </span>
+        </div>
+
+        {# Big market value #}
+        <div class="mt-3">
+          <div class="text-3xl font-extrabold tracking-tight">
+            <span class="bal bal-lg">${{ "{:,.0f}".format(card.market_value) }}</span>
+          </div>
+          <div class="mt-1 flex items-center gap-3 text-sm text-white/80">
+            <span>Cost <span class="bal">${{ "{:,.0f}".format(card.cost_basis) }}</span></span>
+            <span class="font-semibold {{ 'text-emerald-300' if gl_pos else 'text-red-300' }}">
+              {{ '+' if gl_pos else '' }}<span class="bal">${{ "{:,.0f}".format(card.unrealized_gl) }}</span>
+              ({{ '+' if gl_pos else '' }}{{ "{:.1f}".format(card.unrealized_pct) }}%)
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {# Body #}
+      <div class="flex-1 px-5 py-4 space-y-4">
+
+        {# Position count + P&L pill #}
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-gray-500">{{ card.num_positions }} position{{ 's' if card.num_positions != 1 else '' }}</span>
+          {% if card.market_value > 0 %}
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full {{ 'bg-emerald-100 text-emerald-700' if gl_pos else 'bg-red-100 text-red-700' }}">
+            {{ '+' if gl_pos else '' }}{{ "{:.2f}".format(card.unrealized_pct) }}% return
+          </span>
+          {% endif %}
+        </div>
+
+        {# Asset class allocation mini-bars #}
+        {% if card.allocation %}
+        <div>
+          <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Allocation</div>
+          {% set class_colors = {
+            'us_equity':       'bg-blue-500',
+            'intl_equity':     'bg-indigo-400',
+            'fixed_income':    'bg-emerald-500',
+            'real_estate':     'bg-orange-400',
+            'cash':            'bg-gray-300',
+            'commodity':       'bg-yellow-400',
+            'crypto':          'bg-purple-400',
+            'alternative':     'bg-pink-400',
+            'private_equity':  'bg-rose-500',
+            'other':           'bg-slate-400',
+          } %}
+          <div class="space-y-1.5">
+            {% for cls, pct in card.allocation | dictsort(by='value', reverse=true) %}
+            {% if pct >= 0.5 %}
+            <div class="flex items-center gap-2">
+              <div class="w-full flex-1 bg-gray-100 rounded-full h-1.5">
+                <div class="{{ class_colors.get(cls, 'bg-slate-400') }} h-1.5 rounded-full"
+                     style="width: {{ [pct, 100] | min }}%"></div>
+              </div>
+              <div class="flex justify-between w-40 shrink-0">
+                <span class="text-xs text-gray-600">{{ cls | replace('_', ' ') | title }}</span>
+                <span class="text-xs font-medium text-gray-800">{{ "{:.0f}".format(pct) }}%</span>
+              </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {# Top holdings #}
+        {% if card.top_holdings %}
+        <div>
+          <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Top Holdings</div>
+          <div class="divide-y divide-gray-50">
+            {% for h in card.top_holdings %}
+            <div class="flex items-center justify-between py-1.5">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="inline-block w-14 text-xs font-bold text-gray-800 truncate">
+                  {{ h.symbol or (h.name[:10]) }}
+                </span>
+                <span class="text-xs text-gray-400 truncate hidden sm:block" style="max-width:100px">
+                  {{ h.name[:22] if not h.symbol else '' }}
+                </span>
+              </div>
+              <div class="flex items-center gap-3 shrink-0">
+                <span class="text-xs font-medium text-gray-700"><span class="bal">${{ "{:,.0f}".format(h.market_value) }}</span></span>
+                <span class="text-xs {{ 'text-emerald-600' if h.unrealized_gain_loss >= 0 else 'text-red-500' }}">
+                  {{ '+' if h.unrealized_gain_loss >= 0 else '' }}{{ "{:.1f}".format(h.unrealized_pct) }}%
+                </span>
+                <span class="text-xs text-gray-400 w-10 text-right">{{ "{:.1f}".format(h.weight_pct) }}%</span>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+      </div>
+
+      {# Card footer #}
+      <div class="px-5 py-3 bg-gray-50 border-t border-gray-100 flex justify-end">
+        <a href="/portfolio/?account_id={{ acct.id }}"
+           class="text-xs font-medium text-blue-600 hover:text-blue-800">
+          View all positions →
+        </a>
+      </div>
+
+    </div>
+    {% endfor %}
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,479 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "analysis/_subnav.html" %}
+
+<div class="space-y-6">
+
+  {# ── Header ───────────────────────────────────────────────────────────── #}
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="w-3 h-3 rounded-full animate-pulse {{ 'bg-emerald-500' if brief.portfolio_day.up else 'bg-red-500' }}"></div>
+        <h2 class="text-2xl font-bold text-gray-900">{{ brief.report_title }}</h2>
+        {# Session badge #}
+        {% if brief.session == 'PM' %}
+        <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">Closing Data</span>
+        {% else %}
+        <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Pre/Intraday</span>
+        {% endif %}
+        {# ── Markov regime badge ── #}
+        {% if brief.market_regime %}
+        {% set r = brief.market_regime %}
+        {% set _regime_tip = r.symbol ~ ' · signal ' ~ ('+' if r.signal_score >= 0 else '') ~ '%.2f'|format(r.signal_score) ~ ' · persist ' ~ '%.0f'|format(r.persist_pct) ~ '%' %}
+        {% if r.current_regime == 'Bull' %}
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700"
+                title="{{ _regime_tip }}">
+            🐂 Bull Regime
+          </span>
+        {% elif r.current_regime == 'Bear' %}
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700"
+                title="{{ _regime_tip }}">
+            🐻 Bear Regime
+          </span>
+        {% else %}
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
+                title="{{ _regime_tip }}">
+            ↔ Sideways Regime
+          </span>
+        {% endif %}
+        {% endif %}
+      </div>
+      <p class="mt-1 text-sm text-gray-500">
+        {{ brief.as_of }}
+        {% if brief.fetched_at %}&nbsp;·&nbsp; data as of {{ brief.fetched_at }}{% endif %}
+      </p>
+      {% if brief.next_update %}
+      <p class="mt-0.5 text-xs text-gray-400">{{ brief.next_update }}
+        &nbsp;·&nbsp;
+        <a href="#" onclick="refreshAll(event)" id="refresh-link"
+           class="text-blue-500 hover:text-blue-700">Refresh now</a>
+      </p>
+      {% endif %}
+    </div>
+
+    {# Portfolio day change hero #}
+    {% set pd = brief.portfolio_day %}
+    <div class="text-right">
+      <div class="text-xs text-gray-400 uppercase tracking-wide">Portfolio Today</div>
+      <div class="text-3xl font-extrabold {{ 'text-emerald-600' if pd.up else 'text-red-600' }}">
+        <span class="bal bal-xl">{{ '+' if pd.up else '' }}${{ "{:,.0f}".format(pd.day_chg) }}</span>
+      </div>
+      <div class="text-sm font-semibold {{ 'text-emerald-500' if pd.up else 'text-red-500' }}">
+        {{ '+' if pd.up else '' }}{{ "{:.2f}".format(pd.day_chg_pct) }}%
+        &nbsp;·&nbsp; AUM <span class="bal">${{ "{:,.0f}".format(pd.total_mv) }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# ── Narrative ─────────────────────────────────────────────────────────── #}
+  {% if brief.narrative %}
+  <div class="bg-slate-800 rounded-xl p-5 text-white">
+    <div class="flex items-center gap-2 mb-3">
+      <svg class="w-4 h-4 text-amber-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm1 11H9v-2h2v2zm0-4H9V7h2v2z"/>
+      </svg>
+      <span class="text-xs font-semibold uppercase tracking-wider text-slate-300">Market Summary</span>
+    </div>
+    <ul class="space-y-1.5">
+      {% for point in brief.narrative %}
+      <li class="text-sm text-slate-200 leading-relaxed flex gap-2">
+        <span class="text-slate-500 shrink-0 mt-0.5">›</span>
+        <span>{{ point }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {# ── Markov regime detail panel ──────────────────────────────────────── #}
+  {% if brief.market_regime %}
+  {% set r = brief.market_regime %}
+  {% if r.current_regime == 'Bull' %}
+    {% set panel_cls  = 'border-emerald-200 bg-emerald-50' %}
+    {% set bar_bull   = 'bg-emerald-500' %}
+    {% set bar_side   = 'bg-emerald-200' %}
+    {% set bar_bear   = 'bg-red-200' %}
+    {% set label_cls  = 'text-emerald-700' %}
+  {% elif r.current_regime == 'Bear' %}
+    {% set panel_cls  = 'border-red-200 bg-red-50' %}
+    {% set bar_bull   = 'bg-emerald-200' %}
+    {% set bar_side   = 'bg-amber-200' %}
+    {% set bar_bear   = 'bg-red-500' %}
+    {% set label_cls  = 'text-red-700' %}
+  {% else %}
+    {% set panel_cls  = 'border-amber-200 bg-amber-50' %}
+    {% set bar_bull   = 'bg-emerald-300' %}
+    {% set bar_side   = 'bg-amber-400' %}
+    {% set bar_bear   = 'bg-red-300' %}
+    {% set label_cls  = 'text-amber-700' %}
+  {% endif %}
+  <div class="rounded-xl border {{ panel_cls }} p-5">
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+      <h3 class="font-semibold text-gray-900 text-sm">{{ r.symbol }}</h3>
+      <span class="text-sm font-bold {{ label_cls }}">{{ r.current_regime }}</span>
+      <span class="text-xs text-gray-400">signal {{ '+' if r.signal_score >= 0 else '' }}{{ '%.2f'|format(r.signal_score) }}</span>
+      <span class="text-xs text-gray-400">·</span>
+      <span class="text-xs text-gray-400">{{ '%.0f'|format(r.persist_pct) }}% chance of staying {{ r.current_regime }}</span>
+      <span class="text-xs text-gray-400 ml-auto">{{ r.lookback_days }}d history</span>
+    </div>
+
+    {# Stationary distribution bar chart #}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {# Stationary (long-run) #}
+      <div>
+        <div class="text-xs text-gray-500 mb-2 font-medium">Long-Run Equilibrium</div>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Bull</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_bull }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.stationary.bull * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.stationary.bull * 100) }}%</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Sideways</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_side }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.stationary.sideways * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.stationary.sideways * 100) }}%</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Bear</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_bear }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.stationary.bear * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.stationary.bear * 100) }}%</span>
+          </div>
+        </div>
+      </div>
+
+      {# 1-step forward #}
+      <div>
+        <div class="text-xs text-gray-500 mb-2 font-medium">Tomorrow (1-step)</div>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Bull</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_bull }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.one_step.bull * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.one_step.bull * 100) }}%</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Sideways</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_side }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.one_step.sideways * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.one_step.sideways * 100) }}%</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Bear</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_bear }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.one_step.bear * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.one_step.bear * 100) }}%</span>
+          </div>
+        </div>
+      </div>
+
+      {# 5-step forward #}
+      <div>
+        <div class="text-xs text-gray-500 mb-2 font-medium">1-Week Out (5-step)</div>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Bull</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_bull }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.five_step.bull * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.five_step.bull * 100) }}%</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Sideways</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_side }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.five_step.sideways * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.five_step.sideways * 100) }}%</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-16 text-xs text-gray-600">Bear</span>
+            <div class="flex-1 bg-white rounded-full h-2.5 border border-gray-200">
+              <div class="{{ bar_bear }} h-2.5 rounded-full" style="width:{{ '%.0f'|format(r.five_step.bear * 100) }}%"></div>
+            </div>
+            <span class="text-xs font-mono text-gray-700 w-8 text-right">{{ '%.0f'|format(r.five_step.bear * 100) }}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Indices row ──────────────────────────────────────────────────────── #}
+  {% if brief.indices %}
+  <div>
+    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Key Indices &amp; Macro</h3>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {% for idx in brief.indices %}
+      <a href="https://finance.yahoo.com/quote/{{ idx.symbol }}" target="_blank" rel="noopener"
+         class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 hover:shadow-md transition-shadow cursor-pointer block">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="text-xs font-bold text-gray-400 uppercase">{{ idx.symbol.replace('^','') }}</div>
+            <div class="text-xs text-gray-500 truncate">{{ idx.label }}</div>
+          </div>
+          <span class="text-xs font-bold px-1.5 py-0.5 rounded
+                       {{ 'bg-emerald-100 text-emerald-700' if idx.up else 'bg-red-100 text-red-700' }}">
+            {{ '+' if idx.up else '' }}{{ "{:.2f}".format(idx.chg_pct) }}%
+          </span>
+        </div>
+        <div class="mt-2 text-xl font-bold {{ 'text-emerald-600' if idx.up else 'text-red-600' }}">
+          {% if idx.symbol == "^VIX" %}
+            {{ "{:.2f}".format(idx.price) }}
+          {% elif idx.price >= 1000 %}
+            <span class="bal">${{ "{:,.0f}".format(idx.price) }}</span>
+          {% else %}
+            <span class="bal">${{ "{:.2f}".format(idx.price) }}</span>
+          {% endif %}
+        </div>
+        <div class="text-xs font-semibold {{ 'text-emerald-600' if idx.up else 'text-red-500' }}">
+          {{ '+' if idx.up else '' }}{{ "{:.2f}".format(idx.chg_abs) }}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Sector heatmap ───────────────────────────────────────────────────── #}
+  {% if brief.sectors %}
+  <div>
+    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Sector Performance</h3>
+    <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11 gap-2">
+      {% for s in brief.sectors %}
+      {% set pct = s.chg_pct %}
+      {# Intensity: clamp to ±2% range for color depth #}
+      {% set intensity = [pct | abs, 2.0] | min / 2.0 %}
+      {% if s.up %}
+        {% if pct > 1.5 %}  {% set tile_cls = "bg-emerald-600 text-white" %}
+        {% elif pct > 0.75 %}{% set tile_cls = "bg-emerald-400 text-white" %}
+        {% elif pct > 0.25 %}{% set tile_cls = "bg-emerald-200 text-emerald-900" %}
+        {% else %}           {% set tile_cls = "bg-emerald-50 text-emerald-700" %}
+        {% endif %}
+      {% else %}
+        {% if pct < -1.5 %}  {% set tile_cls = "bg-red-600 text-white" %}
+        {% elif pct < -0.75 %}{% set tile_cls = "bg-red-400 text-white" %}
+        {% elif pct < -0.25 %}{% set tile_cls = "bg-red-200 text-red-900" %}
+        {% else %}            {% set tile_cls = "bg-red-50 text-red-700" %}
+        {% endif %}
+      {% endif %}
+      <div class="{{ tile_cls }} rounded-lg p-2.5 text-center cursor-default
+                   hover:opacity-90 transition-opacity" title="{{ s.symbol }}">
+        <div class="text-xs font-semibold leading-tight">{{ s.label }}</div>
+        <div class="text-sm font-extrabold mt-0.5">
+          {{ '+' if s.up else '' }}{{ "{:.2f}".format(pct) }}%
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Portfolio holdings impact ─────────────────────────────────────────── #}
+  {% if brief.holdings_impact %}
+  {% set movers = brief.holdings_impact | selectattr("has_move") | list %}
+  {% set all_h  = brief.holdings_impact %}
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    {# Top gainers today #}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+        <h3 class="font-semibold text-gray-900">Top Gainers Today</h3>
+        <span class="ml-auto text-xs text-gray-400">by $ impact</span>
+      </div>
+      <div class="divide-y divide-gray-50">
+        {% set gainers = all_h | selectattr("up") | list %}
+        {% for h in gainers[:10] %}
+        <a href="https://finance.yahoo.com/quote/{{ h.symbol }}" target="_blank" rel="noopener"
+           class="flex items-center px-5 py-3 hover:bg-emerald-50 transition-colors cursor-pointer group">
+          <div class="w-20 shrink-0">
+            <div class="text-sm font-bold text-gray-900 group-hover:text-emerald-700">{{ h.symbol }}</div>
+            <div class="text-xs text-gray-400 truncate" style="max-width:72px">
+              {{ h.account.split(' ')[0] }}{% if '...' in h.account %} {{ h.account.split('...')[-1] }}{% endif %}
+            </div>
+          </div>
+          <div class="flex-1 mx-3">
+            <div class="w-full bg-gray-100 rounded-full h-1.5">
+              {% set bar = [(h.day_pct / 3 * 100), 100] | min %}
+              <div class="bg-emerald-400 h-1.5 rounded-full" style="width:{{ bar }}%"></div>
+            </div>
+          </div>
+          <div class="text-right shrink-0 min-w-[90px]">
+            <div class="text-sm font-semibold text-emerald-600">+<span class="bal">${{ "{:,.0f}".format(h.day_chg) }}</span></div>
+            <div class="text-xs text-gray-400">+{{ "{:.2f}".format(h.day_pct) }}%
+              &nbsp;·&nbsp; <span class="bal">${{ "{:,.0f}".format(h.curr_price) }}</span>
+            </div>
+          </div>
+        </a>
+        {% else %}
+        <div class="px-5 py-8 text-center text-gray-400 text-sm">No gainers today.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# Top losers today #}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
+        <h3 class="font-semibold text-gray-900">Under Pressure Today</h3>
+        <span class="ml-auto text-xs text-gray-400">by $ impact</span>
+      </div>
+      <div class="divide-y divide-gray-50">
+        {% set losers = all_h | rejectattr("up") | list | reverse | list %}
+        {% for h in losers[:10] %}
+        <a href="https://finance.yahoo.com/quote/{{ h.symbol }}" target="_blank" rel="noopener"
+           class="flex items-center px-5 py-3 hover:bg-red-50 transition-colors cursor-pointer group">
+          <div class="w-20 shrink-0">
+            <div class="text-sm font-bold text-gray-900 group-hover:text-red-700">{{ h.symbol }}</div>
+            <div class="text-xs text-gray-400 truncate" style="max-width:72px">
+              {{ h.account.split(' ')[0] }}{% if '...' in h.account %} {{ h.account.split('...')[-1] }}{% endif %}
+            </div>
+          </div>
+          <div class="flex-1 mx-3">
+            <div class="w-full bg-gray-100 rounded-full h-1.5">
+              {% set bar = [(h.day_pct | abs / 3 * 100), 100] | min %}
+              <div class="bg-red-400 h-1.5 rounded-full" style="width:{{ bar }}%"></div>
+            </div>
+          </div>
+          <div class="text-right shrink-0 min-w-[90px]">
+            <div class="text-sm font-semibold text-red-500"><span class="bal">${{ "{:,.0f}".format(h.day_chg) }}</span></div>
+            <div class="text-xs text-gray-400">{{ "{:.2f}".format(h.day_pct) }}%
+              &nbsp;·&nbsp; <span class="bal">${{ "{:,.0f}".format(h.curr_price) }}</span>
+            </div>
+          </div>
+        </a>
+        {% else %}
+        <div class="px-5 py-8 text-center text-gray-400 text-sm">No losers today.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Full holdings table ──────────────────────────────────────────────── #}
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+    <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+      <h3 class="font-semibold text-gray-900">All Positions — Today's Impact</h3>
+      <div class="flex gap-3 text-xs text-gray-400">
+        <span>{{ all_h | length }} positions</span>
+        <span>·</span>
+        <span>{{ movers | length }} moved ≥0.5%</span>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm divide-y divide-gray-100">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">Symbol</th>
+            <th class="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Account</th>
+            <th class="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase">Price</th>
+            <th class="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase">Day %</th>
+            <th class="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase">Day $</th>
+            <th class="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase hidden lg:table-cell">Mkt Val</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          {% for h in all_h %}
+          <tr class="hover:bg-blue-50 transition-colors cursor-pointer
+                     {% if h.has_move and h.up %}bg-emerald-50/30{% elif h.has_move and not h.up %}bg-red-50/30{% endif %}"
+              onclick="window.open('https://finance.yahoo.com/quote/{{ h.symbol }}','_blank','noopener')"
+              title="Open {{ h.symbol }} on Yahoo Finance">
+            <td class="px-4 py-2.5">
+              <span class="font-bold text-gray-900">{{ h.symbol }}</span>
+              {% if h.has_move %}
+              <span class="ml-1 text-xs px-1 rounded
+                           {{ 'bg-emerald-100 text-emerald-700' if h.up else 'bg-red-100 text-red-600' }}">
+                {{ '▲' if h.up else '▼' }}
+              </span>
+              {% endif %}
+              {# Markov regime micro-badge (only for publicly traded) #}
+              {% if h.regime %}
+              <span class="ml-0.5 text-[10px] font-bold px-1 py-0.5 rounded leading-none
+                           {{ 'bg-emerald-100 text-emerald-700' if h.regime == 'Bull' else ('bg-red-100 text-red-600' if h.regime == 'Bear' else 'bg-gray-100 text-gray-400') }}"
+                    title="Markov regime: {{ h.regime }}{% if h.signal_score is not none %} (signal {{ h.signal_score }}){% endif %}">
+                {{ '↑' if h.regime == 'Bull' else ('↓' if h.regime == 'Bear' else '~') }}
+              </span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2.5 text-gray-500 hidden md:table-cell text-xs">
+              {{ h.account | truncate(28, True) }}
+            </td>
+            <td class="px-4 py-2.5 text-right font-mono text-gray-700">
+              <span class="bal">${{ "{:,.2f}".format(h.curr_price) }}</span>
+            </td>
+            <td class="px-4 py-2.5 text-right font-semibold
+                       {{ 'text-emerald-600' if h.up else 'text-red-500' }}">
+              {{ '+' if h.up else '' }}{{ "{:.2f}".format(h.day_pct) }}%
+            </td>
+            <td class="px-4 py-2.5 text-right font-semibold
+                       {{ 'text-emerald-600' if h.up else 'text-red-500' }}">
+              {{ '+' if h.up else '' }}<span class="bal">${{ "{:,.0f}".format(h.day_chg) }}</span>
+            </td>
+            <td class="px-4 py-2.5 text-right text-gray-600 hidden lg:table-cell">
+              <span class="bal">${{ "{:,.0f}".format(h.market_value) }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot class="bg-gray-50 border-t-2 border-gray-200">
+          <tr>
+            <td colspan="2" class="px-4 py-3 text-sm font-bold text-gray-700">Portfolio Total</td>
+            <td class="px-4 py-3"></td>
+            <td class="px-4 py-3 text-right font-bold
+                       {{ 'text-emerald-600' if brief.portfolio_day.up else 'text-red-600' }}">
+              {{ '+' if brief.portfolio_day.up else '' }}{{ "{:.2f}".format(brief.portfolio_day.day_chg_pct) }}%
+            </td>
+            <td class="px-4 py-3 text-right font-bold
+                       {{ 'text-emerald-600' if brief.portfolio_day.up else 'text-red-600' }}">
+              {{ '+' if brief.portfolio_day.up else '' }}<span class="bal">${{ "{:,.0f}".format(brief.portfolio_day.day_chg) }}</span>
+            </td>
+            <td class="px-4 py-3 text-right font-bold text-gray-800 hidden lg:table-cell">
+              <span class="bal">${{ "{:,.0f}".format(brief.portfolio_day.total_mv) }}</span>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="bg-white rounded-xl border p-10 text-center text-gray-400">
+    No position data available. Import positions first.
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-refresh every 5 minutes
+setTimeout(() => location.reload(), 5 * 60 * 1000);
+
+async function refreshAll(e) {
+  e.preventDefault();
+  const link = document.getElementById('refresh-link');
+  link.textContent = 'Updating prices…';
+  link.style.pointerEvents = 'none';
+  link.style.opacity = '0.6';
+
+  try {
+    // Step 1: push fresh prices to the DB (its own independent session)
+    await fetch('/prices/refresh', { method: 'POST' });
+  } catch (_) { /* network hiccup — still try to rebuild the brief */ }
+
+  // Step 2: rebuild the brief with the new prices
+  link.textContent = 'Rebuilding brief…';
+  window.location.href = '/analysis/morning?refresh=1';
+}
+</script>
+{% endblock %}

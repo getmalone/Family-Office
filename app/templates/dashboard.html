@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Morning Brief Banner -->
+    <a href="/analysis/morning"
+       class="flex items-center justify-between bg-slate-800 hover:bg-slate-700 transition-colors rounded-xl px-6 py-4 shadow-md">
+      <div class="flex items-center gap-4">
+        <div class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shrink-0"></div>
+        <div>
+          <div class="text-white font-semibold text-base">Daily Brief</div>
+          <div class="text-slate-400 text-xs mt-0.5">Morning Brief · Evening Report · sector heatmap · portfolio impact</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-slate-300 text-sm">
+        <span>View today's brief</span>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+      </div>
+    </a>
+
+    <!-- KPI Cards -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="text-sm font-medium text-gray-500">Total AUM</div>
+                <div class="mt-1 text-3xl font-semibold text-gray-900"><span class="bal bal-xl">${{ "{:,.2f}".format(summary.total_market_value) }}</span></div>
+            </div>
+        </div>
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="text-sm font-medium text-gray-500">Unrealized P&L</div>
+                <div class="mt-1 text-3xl font-semibold {% if summary.total_unrealized_gain_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                    <span class="bal bal-xl">${{ "{:,.2f}".format(summary.total_unrealized_gain_loss) }}</span>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="text-sm font-medium text-gray-500">Realized YTD</div>
+                <div class="mt-1 text-3xl font-semibold {% if summary.total_realized_ytd >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                    <span class="bal bal-xl">${{ "{:,.2f}".format(summary.total_realized_ytd) }}</span>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="text-sm font-medium text-gray-500">Pending Approvals</div>
+                <div class="mt-1 text-3xl font-semibold {% if pending_approvals > 0 %}text-amber-600{% else %}text-gray-900{% endif %}">
+                    {{ pending_approvals }}
+                </div>
+                {% if pending_approvals > 0 %}
+                <a href="/approvals/" class="text-sm text-blue-600 hover:text-blue-800">Review &rarr;</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Asset Allocation (percentages only — not sensitive) -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Asset Allocation</h3>
+            {% if summary.allocation %}
+            <div class="space-y-3">
+                {% for asset_class, pct in summary.allocation.items() %}
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">{{ asset_class | replace("_", " ") | title }}</span>
+                        <span class="font-medium">{{ pct }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ pct }}%"></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500">No positions yet. <a href="/portfolio/trade" class="text-blue-600 hover:text-blue-800">Add a trade</a>.</p>
+            {% endif %}
+        </div>
+
+        <!-- Tax Summary -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Tax Summary (YTD)</h3>
+            {% if tax_summary %}
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between"><span class="text-gray-600">Short-Term Gains</span><span class="font-medium text-green-600 bal">${{ "{:,.2f}".format(tax_summary.short_term_gains) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Short-Term Losses</span><span class="font-medium text-red-600 bal">${{ "{:,.2f}".format(tax_summary.short_term_losses) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Long-Term Gains</span><span class="font-medium text-green-600 bal">${{ "{:,.2f}".format(tax_summary.long_term_gains) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Long-Term Losses</span><span class="font-medium text-red-600 bal">${{ "{:,.2f}".format(tax_summary.long_term_losses) }}</span></div>
+                <hr>
+                <div class="flex justify-between font-medium"><span>Net Gain/Loss</span><span class="{% if tax_summary.net_gain_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %} bal">${{ "{:,.2f}".format(tax_summary.net_gain_loss) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Estimated Tax</span><span class="font-medium bal">${{ "{:,.2f}".format(tax_summary.estimated_tax_liability) }}</span></div>
+            </div>
+            {% else %}
+            <p class="text-gray-500">No tax data available yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Top Holdings -->
+    {% if summary.holdings %}
+    <div class="bg-white shadow rounded-lg p-6">
+        <h3 class="text-lg font-medium text-gray-900 mb-4">Top Holdings</h3>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead>
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Market Value</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Unrealized P&L</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for h in summary.holdings[:10] %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm">
+                            <div class="font-medium text-gray-900">{{ h.symbol or h.name }}</div>
+                            <div class="text-gray-500 text-xs">{{ h.account_name }}</div>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-right"><span class="bal">{{ "{:,.4f}".format(h.quantity) }}</span></td>
+                        <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(h.current_price) }}</span></td>
+                        <td class="px-4 py-3 text-sm text-right font-medium"><span class="bal">${{ "{:,.2f}".format(h.market_value) }}</span></td>
+                        <td class="px-4 py-3 text-sm text-right {% if h.unrealized_gain_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                            <span class="bal">${{ "{:,.2f}".format(h.unrealized_gain_loss) }} ({{ "{:,.1f}".format(h.unrealized_pct) }}%)</span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-right">{{ "{:,.1f}".format(h.weight_pct) }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Quick Links -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <a href="/analysis/morning" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">Daily Brief</div>
+            <div class="text-sm text-gray-500">Market dynamics & portfolio impact</div>
+        </a>
+        <a href="/portfolio/trade" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">New Trade</div>
+            <div class="text-sm text-gray-500">Execute a buy or sell order</div>
+        </a>
+        <a href="/tax/harvest" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">Tax Harvesting</div>
+            <div class="text-sm text-gray-500">Find loss-harvesting opportunities</div>
+        </a>
+        <a href="/estate/grat" class="bg-white shadow rounded-lg p-4 hover:shadow-md transition-shadow">
+            <div class="font-medium text-gray-900">GRAT Simulator</div>
+            <div class="text-sm text-gray-500">Model estate planning strategies</div>
+        </a>
+    </div>
+</div>
+{% endblock %}

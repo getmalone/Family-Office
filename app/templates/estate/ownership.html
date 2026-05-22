@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Family Ownership</h2>
+        <div class="space-x-2">
+            <a href="/estate/gifts" class="text-blue-600 hover:text-blue-800 text-sm">Gifts</a>
+            <a href="/estate/grat" class="text-blue-600 hover:text-blue-800 text-sm">GRAT Sim</a>
+        </div>
+    </div>
+
+    {% if tree %}
+    <div class="space-y-4">
+        {% for node in tree %}
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 text-lg">{{ node.name }}</h3>
+            <span class="text-sm text-gray-500">{{ node.node_type | title }}</span>
+            {% if node.children %}
+            <div class="mt-4 space-y-2">
+                {% for child in node.children %}
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded-md ml-6">
+                    <span class="text-sm font-medium">{{ child.name }}</span>
+                    <span class="text-sm text-gray-600">{{ child.ownership_pct }}% ownership</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-gray-500 mt-2">No accounts linked.</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-white shadow rounded-lg p-8 text-center text-gray-500">No family members configured yet.</div>
+    {% endif %}
+</div>
+{% endblock %}

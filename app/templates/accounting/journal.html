@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Journal Entries</h2>
+        <div class="space-x-2">
+            <a href="/accounting/trial-balance" class="text-blue-600 hover:text-blue-800 text-sm">Trial Balance</a>
+            <a href="/accounting/statements" class="text-blue-600 hover:text-blue-800 text-sm">Statements</a>
+        </div>
+    </div>
+
+    {% if entries %}
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Debit</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Credit</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for e in entries %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ e.id }}</td>
+                    <td class="px-4 py-3 text-sm">{{ e.entry_date }}</td>
+                    <td class="px-4 py-3 text-sm">{{ e.description }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ e.source }}</td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(e.total_debit) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(e.total_credit) }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white shadow rounded-lg p-8 text-center">
+        <p class="text-gray-500">No journal entries yet. Entries are created automatically when trades execute.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,390 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{# ── Sub-nav ───────────────────────────────────────────────────────── #}
+{% include "portfolio/_subnav.html" %}
+
+<div class="space-y-6">
+
+  {# ── Header ───────────────────────────────────────────────────────── #}
+  <div class="flex items-end justify-between">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-900">Trends &amp; Performance</h2>
+      <p class="mt-1 text-sm text-gray-500">Portfolio analytics across all accounts</p>
+    </div>
+  </div>
+
+  {# ── KPI row ──────────────────────────────────────────────────────── #}
+  {% set total_gl = movers.total_unrealized %}
+  {% set total_cb = movers.total_cost_basis %}
+  {% set total_mv = movers.total_market_value %}
+  {% set total_pct = (total_gl / total_cb * 100) if total_cb > 0 else 0 %}
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+      <div class="text-xs text-gray-500 uppercase tracking-wide">Total AUM</div>
+      <div class="mt-1 text-2xl font-bold text-gray-900"><span class="bal bal-lg">${{ "{:,.0f}".format(total_mv) }}</span></div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+      <div class="text-xs text-gray-500 uppercase tracking-wide">Total Cost Basis</div>
+      <div class="mt-1 text-2xl font-bold text-gray-900"><span class="bal bal-lg">${{ "{:,.0f}".format(total_cb) }}</span></div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+      <div class="text-xs text-gray-500 uppercase tracking-wide">Unrealized Gain</div>
+      <div class="mt-1 text-2xl font-bold {{ 'text-emerald-600' if total_gl >= 0 else 'text-red-600' }}">
+        {{ '+' if total_gl >= 0 else '' }}<span class="bal bal-lg">${{ "{:,.0f}".format(total_gl) }}</span>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+      <div class="text-xs text-gray-500 uppercase tracking-wide">Total Return</div>
+      <div class="mt-1 text-2xl font-bold {{ 'text-emerald-600' if total_pct >= 0 else 'text-red-600' }}">
+        {{ '+' if total_pct >= 0 else '' }}{{ "{:.2f}".format(total_pct) }}%
+      </div>
+    </div>
+  </div>
+
+  {# ── Portfolio value chart + allocation donut ─────────────────────── #}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    {# Line chart #}
+    <div class="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-semibold text-gray-900">Portfolio Value Over Time</h3>
+        <div class="flex gap-2" id="chart-toggle">
+          <button onclick="showChart('total')"    id="btn-total"    class="chart-btn active-btn text-xs px-3 py-1 rounded-full">Total</button>
+          <button onclick="showChart('accounts')" id="btn-accounts" class="chart-btn text-xs px-3 py-1 rounded-full">By Account</button>
+        </div>
+      </div>
+
+      {% if history.dates %}
+      <div style="position:relative; height:280px;">
+        <canvas id="portfolioChart"></canvas>
+      </div>
+      {% else %}
+      <div class="flex items-center justify-center h-64 text-gray-400 text-sm">
+        Not enough price history yet — check back after the daily price cron runs.
+      </div>
+      {% endif %}
+    </div>
+
+    {# Allocation donut #}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <h3 class="text-base font-semibold text-gray-900 mb-4">Current Allocation</h3>
+      {% if movers.allocation %}
+      <div style="position:relative; height:200px;">
+        <canvas id="allocationChart"></canvas>
+      </div>
+      <div class="mt-4 space-y-1.5" id="alloc-legend">
+        {% set class_colors_hex = {
+          'us_equity':      '#3b82f6',
+          'intl_equity':    '#818cf8',
+          'fixed_income':   '#10b981',
+          'real_estate':    '#f97316',
+          'cash':           '#94a3b8',
+          'commodity':      '#facc15',
+          'crypto':         '#a78bfa',
+          'alternative':    '#f472b6',
+          'private_equity': '#f43f5e',
+          'other':          '#64748b',
+        } %}
+        {% for cls, pct in movers.allocation | dictsort(by='value', reverse=true) %}
+        {% if pct >= 0.1 %}
+        <div class="flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full shrink-0"
+                  style="background:{{ class_colors_hex.get(cls, '#64748b') }}"></span>
+            <span class="text-gray-600">{{ cls | replace('_', ' ') | title }}</span>
+          </div>
+          <span class="font-semibold text-gray-800">{{ "{:.1f}".format(pct) }}%</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-gray-400 text-sm">No allocation data.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Top Gainers / Losers ─────────────────────────────────────────── #}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    {# Gainers #}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+        <h3 class="text-base font-semibold text-gray-900">Top Gainers</h3>
+        <span class="text-xs text-gray-400 ml-auto">by unrealized return %</span>
+      </div>
+      <div class="divide-y divide-gray-50">
+        {% for h in movers.gainers %}
+        <div class="flex items-center px-5 py-3 hover:bg-gray-50 transition-colors">
+          <div class="w-16 shrink-0">
+            <div class="text-sm font-bold text-gray-900">{{ h.symbol or '—' }}</div>
+            <div class="text-xs text-gray-400 truncate" style="max-width:60px">{{ h.account_name.split('...')[0].strip() }}</div>
+          </div>
+
+          {# Gain bar #}
+          <div class="flex-1 mx-3">
+            <div class="flex items-center gap-2">
+              <div class="flex-1 bg-gray-100 rounded-full h-1.5">
+                {% set bar_w = [h.unrealized_pct | float, 100] | min %}
+                <div class="bg-emerald-400 h-1.5 rounded-full" style="width:{{ bar_w }}%"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="text-right shrink-0">
+            <div class="text-sm font-semibold text-emerald-600">+{{ "{:.1f}".format(h.unrealized_pct) }}%</div>
+            <div class="text-xs text-gray-500">+<span class="bal">${{ "{:,.0f}".format(h.unrealized_gain_loss) }}</span></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# Losers #}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-red-400"></span>
+        <h3 class="text-base font-semibold text-gray-900">Underperformers</h3>
+        <span class="text-xs text-gray-400 ml-auto">by unrealized return %</span>
+      </div>
+      <div class="divide-y divide-gray-50">
+        {% for h in movers.losers %}
+        <div class="flex items-center px-5 py-3 hover:bg-gray-50 transition-colors">
+          <div class="w-16 shrink-0">
+            <div class="text-sm font-bold text-gray-900">{{ h.symbol or '—' }}</div>
+            <div class="text-xs text-gray-400 truncate" style="max-width:60px">{{ h.account_name.split('...')[0].strip() }}</div>
+          </div>
+
+          <div class="flex-1 mx-3">
+            <div class="flex items-center gap-2">
+              <div class="flex-1 bg-gray-100 rounded-full h-1.5">
+                {% set bar_w = [h.unrealized_pct | float | abs, 100] | min %}
+                <div class="bg-red-400 h-1.5 rounded-full" style="width:{{ bar_w }}%"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="text-right shrink-0">
+            <div class="text-sm font-semibold text-red-500">{{ "{:.1f}".format(h.unrealized_pct) }}%</div>
+            <div class="text-xs text-gray-500"><span class="bal">${{ "{:,.0f}".format(h.unrealized_gain_loss) }}</span></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Per-account bar chart ────────────────────────────────────────── #}
+  {% if history.by_account %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <h3 class="text-base font-semibold text-gray-900 mb-4">Account Value Comparison</h3>
+    <div style="position:relative; height:240px;">
+      <canvas id="accountBarChart"></canvas>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Data from server ──────────────────────────────────────────────────
+const historyDates   = {{ history.dates   | tojson }};
+const historyTotal   = {{ history.total   | tojson }};
+const historyByAcct  = {{ history.by_account | tojson }};
+const allocLabels    = {{ movers.allocation.keys()   | list | tojson }};
+const allocValues    = {{ movers.allocation.values() | list | tojson }};
+
+// ── Colour palettes ───────────────────────────────────────────────────
+const PALETTE = [
+  '#3b82f6','#10b981','#f97316','#a78bfa','#f43f5e',
+  '#facc15','#06b6d4','#84cc16','#f472b6','#64748b',
+  '#0ea5e9','#34d399','#fb923c','#c084fc','#fb7185',
+];
+const ALLOC_COLORS = {
+  us_equity:     '#3b82f6', intl_equity:   '#818cf8',
+  fixed_income:  '#10b981', real_estate:   '#f97316',
+  cash:          '#94a3b8', commodity:     '#facc15',
+  crypto:        '#a78bfa', alternative:   '#f472b6',
+  private_equity:'#f43f5e', other:         '#64748b',
+};
+
+// ── Portfolio value chart (line) ──────────────────────────────────────
+let portfolioChart = null;
+
+function buildTotalDataset() {
+  return [{
+    label: 'Total Portfolio',
+    data: historyTotal,
+    borderColor: '#3b82f6',
+    backgroundColor: 'rgba(59,130,246,0.1)',
+    fill: true,
+    tension: 0.3,
+    pointRadius: historyTotal.length > 30 ? 0 : 3,
+    borderWidth: 2,
+  }];
+}
+
+function buildAccountDatasets() {
+  return Object.entries(historyByAcct).map(([name, vals], i) => ({
+    label: name,
+    data: vals,
+    borderColor: PALETTE[i % PALETTE.length],
+    backgroundColor: PALETTE[i % PALETTE.length] + '18',
+    fill: false,
+    tension: 0.3,
+    pointRadius: historyTotal.length > 30 ? 0 : 2,
+    borderWidth: 1.5,
+  }));
+}
+
+{% if history.dates %}
+const portfolioCtx = document.getElementById('portfolioChart').getContext('2d');
+portfolioChart = new Chart(portfolioCtx, {
+  type: 'line',
+  data: { labels: historyDates, datasets: buildTotalDataset() },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` $${ctx.parsed.y.toLocaleString('en-US', {maximumFractionDigits:0})}`,
+        }
+      }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+      y: {
+        grid: { color: '#f3f4f6' },
+        ticks: {
+          font: { size: 11 },
+          callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'k'),
+        }
+      }
+    }
+  }
+});
+{% endif %}
+
+// Toggle total vs by-account
+let showingAccounts = false;
+function showChart(mode) {
+  if (!portfolioChart) return;
+  const btnTotal    = document.getElementById('btn-total');
+  const btnAccounts = document.getElementById('btn-accounts');
+  if (mode === 'total') {
+    portfolioChart.data.datasets = buildTotalDataset();
+    portfolioChart.options.plugins.legend.display = false;
+    btnTotal.classList.add('active-btn');
+    btnAccounts.classList.remove('active-btn');
+  } else {
+    portfolioChart.data.datasets = buildAccountDatasets();
+    portfolioChart.options.plugins.legend.display = true;
+    portfolioChart.options.plugins.legend.position = 'bottom';
+    btnAccounts.classList.add('active-btn');
+    btnTotal.classList.remove('active-btn');
+  }
+  portfolioChart.update();
+}
+
+// ── Allocation donut ──────────────────────────────────────────────────
+{% if movers.allocation %}
+const allocCtx = document.getElementById('allocationChart').getContext('2d');
+new Chart(allocCtx, {
+  type: 'doughnut',
+  data: {
+    labels: allocLabels.map(l => l.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())),
+    datasets: [{
+      data: allocValues,
+      backgroundColor: allocLabels.map(l => ALLOC_COLORS[l] || '#64748b'),
+      borderWidth: 2,
+      borderColor: '#fff',
+      hoverOffset: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: '65%',
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` ${ctx.parsed.toFixed(1)}%`
+        }
+      }
+    }
+  }
+});
+{% endif %}
+
+// ── Per-account bar chart (latest values) ─────────────────────────────
+{% if history.by_account %}
+const acctNames  = Object.keys(historyByAcct);
+// Latest non-null value per account
+const acctValues = acctNames.map(name => {
+  const arr = historyByAcct[name].filter(v => v !== null);
+  return arr.length ? arr[arr.length - 1] : 0;
+});
+const barCtx = document.getElementById('accountBarChart').getContext('2d');
+new Chart(barCtx, {
+  type: 'bar',
+  data: {
+    labels: acctNames.map(n => n.length > 22 ? n.slice(0,22)+'…' : n),
+    datasets: [{
+      label: 'Market Value',
+      data: acctValues,
+      backgroundColor: acctNames.map((_, i) => PALETTE[i % PALETTE.length] + 'cc'),
+      borderColor:     acctNames.map((_, i) => PALETTE[i % PALETTE.length]),
+      borderWidth: 1,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` $${ctx.parsed.y.toLocaleString('en-US', {maximumFractionDigits:0})}`
+        }
+      }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+      y: {
+        grid: { color: '#f3f4f6' },
+        ticks: {
+          font: { size: 11 },
+          callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'k'),
+        }
+      }
+    }
+  }
+});
+{% endif %}
+</script>
+
+<style>
+.chart-btn {
+  background: #f1f5f9;
+  color: #64748b;
+  font-weight: 500;
+  transition: all .15s;
+}
+.chart-btn:hover { background: #e2e8f0; }
+.active-btn {
+  background: #3b82f6 !important;
+  color: #fff !important;
+}
+</style>
+{% endblock %}

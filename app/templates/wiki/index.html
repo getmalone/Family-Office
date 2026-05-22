@@ -1,0 +1,1518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Family Office — Technical Wiki</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #181c27;
+    --border: #252b3b;
+    --accent: #4f8ef7;
+    --accent2: #a78bfa;
+    --gold: #f5c842;
+    --green: #34d399;
+    --red: #f87171;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --code-bg: #0d1117;
+    --nav-w: 260px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    display: flex;
+  }
+
+  /* ── Sidebar TOC ── */
+  #sidebar {
+    width: var(--nav-w);
+    min-width: var(--nav-w);
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    z-index: 100;
+    padding: 0 0 2rem 0;
+  }
+  #sidebar-header {
+    padding: 1.2rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: #0d1117;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  #sidebar-header .project { font-weight: 700; font-size: 0.85rem; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; }
+  #sidebar-header .version { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+  #toc { padding: 0.5rem 0; }
+  #toc a {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 1rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+    line-height: 1.4;
+  }
+  #toc a:hover { color: var(--text); background: rgba(255,255,255,0.04); border-left-color: var(--accent); }
+  #toc a.active { color: var(--accent); border-left-color: var(--accent); background: rgba(79,142,247,0.08); }
+  #toc .toc-group { padding: 0.8rem 1rem 0.2rem; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #4a5568; }
+  #toc .emoji { font-size: 0.85em; min-width: 1.2em; }
+  #toc .num { color: #4a5568; font-size: 0.7rem; min-width: 1.6em; }
+
+  /* ── Main content ── */
+  #main {
+    margin-left: var(--nav-w);
+    flex: 1;
+    max-width: 960px;
+    padding: 3rem 3rem 6rem;
+  }
+
+  /* ── Hero ── */
+  #hero {
+    margin-bottom: 3.5rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  #hero h1 {
+    font-size: 2.2rem;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+  }
+  #hero .tagline { color: var(--muted); font-size: 1rem; margin-bottom: 1.2rem; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid;
+    letter-spacing: 0.02em;
+  }
+  .badge-blue  { color: #60a5fa; border-color: #1e3a5f; background: rgba(59,130,246,0.1); }
+  .badge-violet{ color: #a78bfa; border-color: #3b2d6e; background: rgba(167,139,250,0.1); }
+  .badge-green { color: #34d399; border-color: #14532d; background: rgba(52,211,153,0.1); }
+  .badge-gold  { color: #fbbf24; border-color: #713f12; background: rgba(251,191,36,0.1); }
+  .badge-slate { color: #94a3b8; border-color: #334155; background: rgba(148,163,184,0.08); }
+
+  /* ── Sections ── */
+  .section {
+    margin-bottom: 3.5rem;
+    padding-top: 1rem;
+    scroll-margin-top: 1rem;
+  }
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 1.2rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .sec-num { font-size: 0.75rem; font-weight: 700; color: #4a5568; letter-spacing: 0.05em; min-width: 2.2em; }
+  .sec-emoji { font-size: 1.3rem; }
+  .section-header h2 { font-size: 1.35rem; font-weight: 700; color: #fff; }
+
+  h3 { font-size: 0.95rem; font-weight: 700; color: var(--accent); margin: 1.4rem 0 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  h4 { font-size: 0.9rem; font-weight: 700; color: var(--accent2); margin: 1rem 0 0.35rem; }
+
+  p { margin-bottom: 0.8rem; color: #cbd5e1; }
+  strong { color: var(--text); }
+  em { color: var(--gold); font-style: normal; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; margin: 1rem 0 1.5rem; border-radius: 8px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  thead { background: #0d1117; }
+  thead th { padding: 0.6rem 0.9rem; text-align: left; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tbody td { padding: 0.55rem 0.9rem; border-bottom: 1px solid rgba(37,43,59,0.6); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,0.025); }
+  td code, th code { font-family: 'Fira Code', 'JetBrains Mono', monospace; font-size: 0.8em; background: var(--code-bg); padding: 0.1em 0.4em; border-radius: 3px; color: #7dd3fc; }
+  td.tag { font-size: 0.72rem; color: var(--muted); }
+  td.mono { font-family: 'Fira Code', monospace; font-size: 0.8rem; color: #7dd3fc; }
+  td.green { color: var(--green); }
+  td.red { color: var(--red); }
+  td.gold { color: var(--gold); }
+  td.violet { color: var(--accent2); }
+
+  /* ── Code blocks ── */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.1rem 1.3rem;
+    overflow-x: auto;
+    margin: 0.8rem 0 1.2rem;
+    font-size: 0.8rem;
+    line-height: 1.6;
+  }
+  pre code { font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace; color: #a5f3fc; background: none; padding: 0; }
+  code { font-family: 'Fira Code', monospace; font-size: 0.83em; background: #161b27; color: #7dd3fc; padding: 0.15em 0.45em; border-radius: 4px; }
+
+  /* ── Lists ── */
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.8rem; }
+  li { margin-bottom: 0.3rem; color: #cbd5e1; }
+  li strong { color: var(--text); }
+  li code { font-size: 0.8em; }
+
+  /* ── Callout boxes ── */
+  .callout {
+    display: flex;
+    gap: 0.8rem;
+    padding: 0.9rem 1.1rem;
+    border-radius: 8px;
+    margin: 1rem 0 1.2rem;
+    font-size: 0.85rem;
+  }
+  .callout-icon { font-size: 1.1rem; min-width: 1.4em; }
+  .callout-body p { margin-bottom: 0; color: inherit; }
+  .callout-info  { background: rgba(79,142,247,0.08); border: 1px solid rgba(79,142,247,0.25); color: #93c5fd; }
+  .callout-warn  { background: rgba(245,200,66,0.08); border: 1px solid rgba(245,200,66,0.25); color: #fde68a; }
+  .callout-green { background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.25); color: #6ee7b7; }
+  .callout-red   { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.25); color: #fca5a5; }
+
+  /* ── Flow diagram ── */
+  .flow {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.3rem;
+    font-family: 'Fira Code', monospace;
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    margin: 0.8rem 0 1.2rem;
+    line-height: 1.8;
+  }
+  .flow .arrow { color: var(--accent); }
+  .flow .node  { color: var(--green); }
+  .flow .label { color: var(--gold); }
+  .flow .cond  { color: var(--accent2); }
+  .flow .dim   { color: #4a5568; }
+
+  /* ── Section ref ── */
+  .ref { color: var(--accent2); font-size: 0.78rem; font-style: normal; }
+
+  /* ── divider ── */
+  .div { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+
+  /* ── pills ── */
+  .pill { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 4px; margin: 0 0.1rem; }
+  .pill-blue   { background: rgba(59,130,246,0.15); color: #93c5fd; }
+  .pill-green  { background: rgba(52,211,153,0.12); color: #6ee7b7; }
+  .pill-red    { background: rgba(248,113,113,0.12); color: #fca5a5; }
+  .pill-gold   { background: rgba(251,191,36,0.12); color: #fde68a; }
+  .pill-violet { background: rgba(167,139,250,0.12); color: #c4b5fd; }
+  .pill-slate  { background: rgba(148,163,184,0.1); color: #94a3b8; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  @media (max-width: 900px) {
+    #sidebar { display: none; }
+    #main { margin-left: 0; padding: 1.5rem 1.2rem 4rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar TOC ─────────────────────────────────────────────────── -->
+<nav id="sidebar">
+  <div id="sidebar-header">
+    <div class="project">Family Office</div>
+    <div class="version">v0.1.0 · FastAPI · SQLite · Claude API · 2026</div>
+  </div>
+  <div id="toc">
+    <div class="toc-group">Foundation</div>
+    <a href="#s01"><span class="num">01</span><span class="emoji">🏛️</span> Overview &amp; Vision</a>
+    <a href="#s02"><span class="num">02</span><span class="emoji">⚙️</span> Tech Stack</a>
+    <a href="#s03"><span class="num">03</span><span class="emoji">📁</span> Project Structure</a>
+    <a href="#s04"><span class="num">04</span><span class="emoji">🔧</span> Configuration</a>
+
+    <div class="toc-group">Data Layer</div>
+    <a href="#s05"><span class="num">05</span><span class="emoji">🗃️</span> Database Schema</a>
+    <a href="#s06"><span class="num">06</span><span class="emoji">⚡</span> Services Layer</a>
+
+    <div class="toc-group">API &amp; UI</div>
+    <a href="#s07"><span class="num">07</span><span class="emoji">🔌</span> API Routes</a>
+    <a href="#s08"><span class="num">08</span><span class="emoji">🖥️</span> Templates &amp; UI</a>
+    <a href="#s09"><span class="num">09</span><span class="emoji">🔒</span> Privacy Mode</a>
+
+    <div class="toc-group">Intelligence</div>
+    <a href="#s10"><span class="num">10</span><span class="emoji">🤖</span> AI Agent System</a>
+    <a href="#s11"><span class="num">11</span><span class="emoji">📰</span> Daily Market Brief</a>
+    <a href="#s12"><span class="num">12</span><span class="emoji">📈</span> Risk &amp; Analysis</a>
+
+    <div class="toc-group">Finance &amp; Planning</div>
+    <a href="#s13"><span class="num">13</span><span class="emoji">💰</span> Tax &amp; Compliance</a>
+    <a href="#s14"><span class="num">14</span><span class="emoji">🏛️</span> Estate Planning</a>
+    <a href="#s15"><span class="num">15</span><span class="emoji">✅</span> Approval System</a>
+
+    <div class="toc-group">Operations</div>
+    <a href="#s16"><span class="num">16</span><span class="emoji">🔄</span> Data Flows</a>
+    <a href="#s17"><span class="num">17</span><span class="emoji">🛠️</span> Scripts &amp; Utilities</a>
+    <a href="#s18"><span class="num">18</span><span class="emoji">🔐</span> Security</a>
+  </div>
+</nav>
+
+<!-- ── Main ───────────────────────────────────────────────────────── -->
+<main id="main">
+
+<!-- Hero -->
+<div id="hero">
+  <h1>Family Office</h1>
+  <p class="tagline">Private wealth management platform — multi-agent AI, double-entry accounting, tax optimization, and estate planning in one local-first application.</p>
+  <div class="badge-row">
+    <span class="badge badge-blue">FastAPI 0.115</span>
+    <span class="badge badge-violet">Claude claude-sonnet-4-5</span>
+    <span class="badge badge-green">LangGraph 0.3</span>
+    <span class="badge badge-gold">SQLite WAL</span>
+    <span class="badge badge-slate">Python 3.12+</span>
+    <span class="badge badge-slate">v0.1.0</span>
+    <span class="badge badge-slate">2026</span>
+  </div>
+</div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 01 OVERVIEW -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s01">
+  <div class="section-header">
+    <span class="sec-num">01</span>
+    <span class="sec-emoji">🏛️</span>
+    <h2>Overview &amp; Vision</h2>
+  </div>
+
+  <p>The Family Office is a <strong>production-ready, local-first wealth management platform</strong> purpose-built for a single family: the Principal, spouse, and children. It combines a FastAPI web dashboard for human interaction with a <strong>LangGraph multi-agent AI backend</strong> for autonomous analysis and execution.</p>
+
+  <p>The core philosophy is <em>human-in-the-loop for material decisions, AI for everything analytical</em>. Any trade over $50,000, all gifts, and all tax elections are routed through an explicit approval queue before execution. The Principal retains final authority; the AI agents handle research, analysis, and recommendation.</p>
+
+  <h3>Five Design Pillars</h3>
+  <ul>
+    <li><strong>Local-first:</strong> Runs entirely on <code>127.0.0.1</code>. All data stays on-device in a SQLite file. No cloud dependency except LLM API calls.</li>
+    <li><strong>Correctness over convenience:</strong> Full tax-lot tracking (FIFO/LIFO/HIFO), wash-sale detection, double-entry accounting journal — every position has an immutable audit trail.</li>
+    <li><strong>AI as advisor, not executor:</strong> The LangGraph supervisor routes questions to specialist agents. Agents can <em>request</em> trades but cannot execute them unilaterally above threshold.</li>
+    <li><strong>Real market data:</strong> Live prices via <code>yfinance</code> bulk-download, cached in SQLite and refreshed daily by scripts. A <code>STABLE_VALUE_SYMBOLS</code> guard prevents cash-equivalent tickers from being priced at their (incorrect) ETF equivalents.</li>
+    <li><strong>Privacy mode:</strong> A single keyboard shortcut hides all dollar balances behind <code>•••••</code> on every page — implemented with pure CSS, no re-render needed.</li>
+  </ul>
+
+  <h3>What the system manages</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Domain</th><th>Capability</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Portfolio</strong></td><td>Positions across all accounts; buy/sell execution; per-account cards; 120-day history charts; top movers</td></tr>
+        <tr><td><strong>Tax</strong></td><td>Tax-loss harvest candidates; YTD realized gain/loss; cost basis election simulation (FIFO vs HIFO vs LIFO); Section 475 analysis; Schedule D generation</td></tr>
+        <tr><td><strong>Accounting</strong></td><td>Double-entry journal with auto-entries for every trade; trial balance; income statement; balance sheet</td></tr>
+        <tr><td><strong>Analysis</strong></td><td>Portfolio volatility, Sharpe ratio, max drawdown, beta, VaR/CVaR; Markov regime detection (portfolio-blended + per-ticker); two-phase Monte Carlo with monthly deposits, withdrawal modeling, and survival rate; allocation drift vs investment profile</td></tr>
+        <tr><td><strong>Estate</strong></td><td>Gift tracking with annual exclusion / lifetime exemption calculation; GRAT simulation across growth scenarios; ownership tree</td></tr>
+        <tr><td><strong>Daily Brief</strong></td><td>Morning / Evening report with 10 macro indices, 11 sector ETFs, and per-position portfolio day impact; narrative auto-generated by the service layer</td></tr>
+        <tr><td><strong>AI Chat</strong></td><td>General LangGraph supervisor + direct portfolio advice endpoint with live context injection</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 02 TECH STACK -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s02">
+  <div class="section-header">
+    <span class="sec-num">02</span>
+    <span class="sec-emoji">⚙️</span>
+    <h2>Tech Stack</h2>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Category</th><th>Library</th><th>Version</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Web framework</strong></td><td class="mono">FastAPI</td><td>&ge;0.115</td><td>ASGI app, routing, dependency injection</td></tr>
+        <tr><td><strong>ASGI server</strong></td><td class="mono">uvicorn[standard]</td><td>&ge;0.34</td><td>Production-grade server with hot reload</td></tr>
+        <tr><td><strong>Templating</strong></td><td class="mono">Jinja2</td><td>&ge;3.1</td><td>Server-side HTML rendering; 31 templates</td></tr>
+        <tr><td><strong>ORM</strong></td><td class="mono">SQLAlchemy</td><td>&ge;2.0</td><td>Declarative models; session management</td></tr>
+        <tr><td><strong>Migrations</strong></td><td class="mono">Alembic</td><td>&ge;1.14</td><td>Schema versioning (table creation on startup)</td></tr>
+        <tr><td><strong>Validation</strong></td><td class="mono">Pydantic v2</td><td>&ge;2.10</td><td>Request/response schemas; settings</td></tr>
+        <tr><td><strong>Agent graph</strong></td><td class="mono">LangGraph</td><td>&ge;0.3</td><td>Multi-agent state machine with message accumulation</td></tr>
+        <tr><td><strong>Agent supervisor</strong></td><td class="mono">langgraph-supervisor</td><td>&ge;0.0.7</td><td>Supervisor-worker pattern; routing logic</td></tr>
+        <tr><td><strong>LLM (primary)</strong></td><td class="mono">langchain-anthropic</td><td>&ge;0.3</td><td>Claude claude-sonnet-4-5 via Anthropic API</td></tr>
+        <tr><td><strong>LLM (fallback)</strong></td><td class="mono">langchain-openai</td><td>&ge;0.3</td><td>OpenAI fallback if Anthropic key absent</td></tr>
+        <tr><td><strong>Market data</strong></td><td class="mono">yfinance</td><td>&ge;0.2</td><td>Daily price fetching; bulk download for risk metrics</td></tr>
+        <tr><td><strong>Data analysis</strong></td><td class="mono">pandas / numpy</td><td>&ge;2.2 / &ge;2.0</td><td>Return series construction; Monte Carlo simulation</td></tr>
+        <tr><td><strong>HTTP client</strong></td><td class="mono">httpx</td><td>&ge;0.28</td><td>Async HTTP (reserved for future external calls)</td></tr>
+        <tr><td><strong>Encryption</strong></td><td class="mono">cryptography</td><td>&ge;44.0</td><td>AES field encryption for SSN/tax ID columns</td></tr>
+        <tr><td><strong>SSE</strong></td><td class="mono">sse-starlette</td><td>&ge;2.0</td><td>Streaming support (declared, endpoints planned)</td></tr>
+        <tr><td><strong>Testing</strong></td><td class="mono">pytest / pytest-asyncio</td><td>&ge;8.0</td><td>Service-layer unit tests</td></tr>
+        <tr><td><strong>Linting</strong></td><td class="mono">ruff</td><td>&ge;0.8</td><td>Fast Python linter</td></tr>
+        <tr><td><strong>Database</strong></td><td class="mono">SQLite (WAL mode)</td><td>built-in</td><td>All persistent state; WAL for concurrent reads</td></tr>
+        <tr><td><strong>Frontend CSS</strong></td><td class="mono">Tailwind CSS</td><td>CDN</td><td>Utility-first responsive layout</td></tr>
+        <tr><td><strong>Frontend charts</strong></td><td class="mono">Chart.js 4</td><td>CDN</td><td>Portfolio history line charts; Monte Carlo fan charts; allocation donut</td></tr>
+        <tr><td><strong>Frontend helpers</strong></td><td class="mono">htmx 2.0.4</td><td>CDN</td><td>Partial page updates (reserved for future use)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Entry Point</h3>
+  <pre><code>cd kelly-family-office
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload</code></pre>
+
+  <div class="callout callout-info">
+    <span class="callout-icon">ℹ️</span>
+    <div class="callout-body"><p>The default port in <code>config.py</code> is <strong>8000</strong>; the team runs on <strong>8001</strong> to avoid conflicts with other local services. Pass <code>--port 8001</code> or set <code>KFO_PORT=8001</code> in <code>.env</code>.</p></div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 03 PROJECT STRUCTURE -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s03">
+  <div class="section-header">
+    <span class="sec-num">03</span>
+    <span class="sec-emoji">📁</span>
+    <h2>Project Structure</h2>
+  </div>
+
+  <pre><code>kelly-family-office/
+├── .env                         # Active configuration (KFO_ prefixed env vars)
+├── .env.example                 # Template with all available keys
+├── pyproject.toml               # Package metadata + all dependencies
+├── app/
+│   ├── main.py                  # FastAPI factory, router registration, startup hook
+│   ├── config.py                # Pydantic-settings: KFO_ env vars → Settings singleton
+│   ├── dependencies.py          # FastAPI DI: get_db(), get_settings()
+│   ├── models/                  # SQLAlchemy ORM (18 tables)
+│   │   ├── base.py              # DeclarativeBase, TimestampMixin, SoftDeleteMixin
+│   │   ├── family.py            # FamilyMember, FamilyEntity, Ownership
+│   │   ├── account.py           # Account, AccountTypeEnum (13 types)
+│   │   ├── asset.py             # Asset, AssetPrice, AssetClassEnum (12 classes)
+│   │   ├── transaction.py       # Transaction, TransactionTypeEnum (13 types)
+│   │   ├── tax_lot.py           # TaxLot, TaxLotDisposal, WashSaleAdjustment
+│   │   ├── journal.py           # ChartOfAccounts, JournalEntry, JournalLine
+│   │   ├── expense.py           # ExpenseCategory, Vendor, Expense
+│   │   ├── approval.py          # ApprovalPolicy, Approval, ApprovalStatusEnum
+│   │   ├── estate.py            # Gift, GRATSimulation
+│   │   ├── report.py            # GeneratedReport, ComplianceFlag
+│   │   └── investment_profile.py # InvestmentProfile, RiskToleranceEnum
+│   ├── schemas/                 # Pydantic v2 request/response models
+│   │   ├── common.py            # HealthCheck, Pagination, ErrorResponse, DateRange
+│   │   ├── portfolio.py         # HoldingDetail, PortfolioSummary, TradeRequest
+│   │   ├── tax.py               # HarvestCandidate, TaxSummary, ElectionSimResult
+│   │   ├── accounting.py        # JournalEntryCreate, TrialBalance, IncomeStatement
+│   │   ├── approval.py          # ApprovalOut, ApprovalDecision
+│   │   ├── estate.py            # GiftCreate, GRATParams, OwnershipNode
+│   │   ├── reporting.py         # ReportRequest, ReportOut, ComplianceFlagOut
+│   │   └── analysis.py          # RiskMetrics, DriftAnalysis, MonteCarloResult
+│   ├── services/                # Business logic (pure Python, no FastAPI)
+│   │   ├── db.py                # Engine singleton, WAL mode, session factory
+│   │   ├── portfolio_service.py # Trade execution, tax-lot lifecycle, wash-sale detection
+│   │   ├── market_data.py       # yfinance fetching, STABLE_VALUE_SYMBOLS guard, cache
+│   │   ├── tax_service.py       # Harvest candidates, tax summary, election simulation
+│   │   ├── accounting_service.py # Double-entry journal, auto-journaling, statements
+│   │   ├── approval_service.py  # HITL workflow: create, decide, expire
+│   │   ├── estate_service.py    # Gifts, GRAT simulation, ownership tree
+│   │   ├── reporting_service.py # Report generation, Schedule D, compliance scan
+│   │   ├── morning_brief_service.py # AM/PM cached market brief
+│   │   ├── markov_regime_service.py # Markov chain regime detection (portfolio + per-ticker)
+│   │   └── analysis_service.py  # Risk metrics, Monte Carlo, profiles, drift
+│   ├── agents/                  # LangGraph multi-agent system
+│   │   ├── state.py             # FamilyOfficeState TypedDict
+│   │   ├── supervisor.py        # build_supervisor() → compiled LangGraph
+│   │   ├── {domain}_agent.py    # 6 specialist agents (portfolio/tax/accounting/...)
+│   │   └── tools/               # Tool factories for each agent (7 modules)
+│   ├── api/                     # FastAPI routers (11 modules)
+│   │   ├── dashboard.py         # GET /
+│   │   ├── portfolio.py         # /portfolio/*
+│   │   ├── tax.py               # /tax/*
+│   │   ├── accounting.py        # /accounting/*
+│   │   ├── reports.py           # /reports/*
+│   │   ├── estate.py            # /estate/*
+│   │   ├── approvals.py         # /approvals/*
+│   │   ├── agent_chat.py        # /agent/invoke, /agent/portfolio-advice
+│   │   ├── analysis.py          # /analysis/*
+│   │   ├── prices.py            # /prices/*
+│   │   └── health.py            # /health
+│   └── templates/               # Jinja2 templates (31 files)
+│       ├── base.html            # Layout: nav, privacy toggle, chat panel
+│       ├── wiki/index.html      # ← This document
+│       ├── dashboard.html
+│       ├── portfolio/           # 10 templates
+│       ├── tax/                 # 3 templates
+│       ├── accounting/          # 3 templates
+│       ├── reports/             # 1 template
+│       ├── estate/              # 3 templates
+│       ├── approvals/           # 2 templates
+│       └── analysis/            # 7 templates + _subnav partial
+├── scripts/
+│   ├── update_prices.py         # Bulk yfinance price refresh (run daily)
+│   ├── update_schwab_000.py     # Import Schwab ...000 account CSV positions
+│   ├── update_schwab_645.py     # Import Schwab ...645 account CSV positions
+│   ├── update_schwab_912.py     # Import Schwab ...912 account CSV positions
+│   ├── update_fidelity.py       # Import Fidelity account positions
+│   └── update_529.py            # Import 529 plan positions
+├── tests/
+│   └── test_services/           # pytest unit tests for service layer
+└── data/
+    └── family_office.db         # SQLite database file (created at runtime)</code></pre>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 04 CONFIGURATION -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s04">
+  <div class="section-header">
+    <span class="sec-num">04</span>
+    <span class="sec-emoji">🔧</span>
+    <h2>Configuration</h2>
+  </div>
+
+  <p>All settings use the <code>KFO_</code> environment variable prefix, loaded from <code>.env</code> via <strong>pydantic-settings</strong>. The <code>Settings</code> singleton is instantiated once at module import and shared across the entire application via <code>get_settings()</code>.</p>
+
+  <p>The <code>.env</code> file path is resolved <strong>absolutely</strong> using <code>Path(__file__).parent.parent / ".env"</code> to avoid working-directory-dependent failures when uvicorn is started from different locations.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Setting</th><th>Env Var</th><th>Default</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">db_path</td><td><code>KFO_DB_PATH</code></td><td><code>data/family_office.db</code></td><td>Relative to project root</td></tr>
+        <tr><td class="mono">db_passphrase</td><td><code>KFO_DB_PASSPHRASE</code></td><td><em>dev-only string</em></td><td>For optional SQLCipher encryption</td></tr>
+        <tr><td class="mono">anthropic_api_key</td><td><code>KFO_ANTHROPIC_API_KEY</code></td><td><code>""</code></td><td>Required for AI features</td></tr>
+        <tr><td class="mono">openai_api_key</td><td><code>KFO_OPENAI_API_KEY</code></td><td><code>""</code></td><td>Fallback LLM if Anthropic absent</td></tr>
+        <tr><td class="mono">llm_provider</td><td><code>KFO_LLM_PROVIDER</code></td><td><code>anthropic</code></td><td></td></tr>
+        <tr><td class="mono">llm_model</td><td><code>KFO_LLM_MODEL</code></td><td><code>claude-sonnet-4-5</code></td><td>Override to any Anthropic model ID</td></tr>
+        <tr><td class="mono">market_data_cache_ttl_minutes</td><td><code>KFO_MARKET_DATA_CACHE_TTL_MINUTES</code></td><td><code>15</code></td><td>Price cache age before re-fetch</td></tr>
+        <tr><td class="mono">trade_approval_threshold</td><td><code>KFO_TRADE_APPROVAL_THRESHOLD</code></td><td><code>50000</code></td><td>Dollar amount above which trades need approval</td></tr>
+        <tr><td class="mono">gift_approval_threshold</td><td><code>KFO_GIFT_APPROVAL_THRESHOLD</code></td><td><code>18000</code></td><td>Annual exclusion trigger (2026 IRS limit)</td></tr>
+        <tr><td class="mono">host</td><td><code>KFO_HOST</code></td><td><code>127.0.0.1</code></td><td>Always bind to loopback</td></tr>
+        <tr><td class="mono">port</td><td><code>KFO_PORT</code></td><td><code>8000</code></td><td>Team uses 8001 to avoid conflicts</td></tr>
+        <tr><td class="mono">field_encryption_key</td><td><code>KFO_FIELD_ENCRYPTION_KEY</code></td><td><code>""</code></td><td>AES key for SSN/account number columns</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Minimal .env</h3>
+  <pre><code>KFO_ANTHROPIC_API_KEY=sk-ant-api03-...
+KFO_LLM_MODEL=claude-sonnet-4-5</code></pre>
+
+  <div class="callout callout-warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body"><p>The <code>/agent/portfolio-advice</code> endpoint has a three-tier API key resolution: (1) <code>settings.anthropic_api_key</code>, (2) <code>os.environ.get("ANTHROPIC_API_KEY")</code>, (3) direct file-read of <code>.env</code>. A 401 error means all three resolved to an empty or invalid value.</p></div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 05 DATABASE SCHEMA -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s05">
+  <div class="section-header">
+    <span class="sec-num">05</span>
+    <span class="sec-emoji">🗃️</span>
+    <h2>Database Schema</h2>
+  </div>
+
+  <p>The database is a single <strong>SQLite file</strong> (<code>data/family_office.db</code>) with WAL mode enabled, foreign key enforcement, and a 5-second busy timeout. Tables are created via <code>Base.metadata.create_all()</code> on startup — no migration runner is required for a fresh install.</p>
+
+  <h3>Entity Relationship Overview</h3>
+  <div class="flow">
+<span class="node">family_members</span> ──owns──▶ <span class="node">accounts</span> ◀── <span class="node">family_entities</span><br>
+<span class="dim">                                    │</span><br>
+<span class="dim">                          ┌─────────┴──────────────┐</span><br>
+                    <span class="node">transactions</span>              <span class="node">tax_lots</span><br>
+                    <span class="dim">      │                       │</span><br>
+              <span class="node">journal_entries</span>       <span class="node">tax_lot_disposals</span><br>
+              <span class="dim">      │                       │</span><br>
+          <span class="node">journal_lines</span>        <span class="node">wash_sale_adjustments</span><br>
+          <span class="dim">      │</span><br>
+    <span class="node">chart_of_accounts</span><br><br>
+<span class="node">approvals</span> ──gates──▶ <span class="node">transactions</span> + <span class="node">gifts</span> + <span class="node">journal_entries</span><br>
+<span class="node">assets</span> ──priced by──▶ <span class="node">asset_prices</span>
+  </div>
+
+  <h3>Core Tables</h3>
+
+  <h4>family_members</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">id</td><td>Integer PK</td><td></td></tr>
+      <tr><td class="mono">first_name, last_name</td><td>String(100)</td><td>Property: <code>full_name</code></td></tr>
+      <tr><td class="mono">date_of_birth</td><td>Date</td><td>nullable</td></tr>
+      <tr><td class="mono">ssn_encrypted</td><td>String(500)</td><td>AES-encrypted SSN</td></tr>
+      <tr><td class="mono">relationship</td><td>String(50)</td><td>"principal", "spouse", "child"</td></tr>
+      <tr><td class="mono">email</td><td>String(200)</td><td>nullable</td></tr>
+      <tr><td class="mono">is_active</td><td>Boolean</td><td>default True</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>accounts</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">id</td><td>Integer PK</td><td></td></tr>
+      <tr><td class="mono">name</td><td>String(200)</td><td>e.g. "Fidelity 401(k) ...797"</td></tr>
+      <tr><td class="mono">account_type</td><td>AccountTypeEnum</td><td>brokerage, ira_traditional, ira_roth, 401k, trust, bank_checking, bank_savings, real_estate, private_equity, crypto, hsa, 529, other</td></tr>
+      <tr><td class="mono">institution</td><td>String(200)</td><td>nullable</td></tr>
+      <tr><td class="mono">account_number_encrypted</td><td>String(500)</td><td>nullable, AES-encrypted</td></tr>
+      <tr><td class="mono">is_taxable</td><td>Boolean</td><td>default True — controls harvest candidate inclusion</td></tr>
+      <tr><td class="mono">primary_owner_id</td><td>FK → family_members</td><td>nullable</td></tr>
+      <tr><td class="mono">tax_entity_id</td><td>FK → family_entities</td><td>nullable</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>assets + asset_prices</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">symbol</td><td>String(20)</td><td>nullable (CITs like 14022L645 have no ticker)</td></tr>
+      <tr><td class="mono">name</td><td>String(300)</td><td>Full descriptive name</td></tr>
+      <tr><td class="mono">asset_class</td><td>AssetClassEnum</td><td>us_equity, intl_equity, fixed_income, real_estate, private_equity, venture_capital, hedge_fund, commodity, crypto, cash, alternative, other</td></tr>
+      <tr><td class="mono">cusip / isin</td><td>String(20)</td><td>nullable — used for CIT identification</td></tr>
+      <tr><td class="mono">is_publicly_traded</td><td>Boolean</td><td>False → skip yfinance; use manual price</td></tr>
+      <tr><td class="mono">is_qsbs_eligible</td><td>Boolean</td><td>Tracks Section 1202 QSBS eligibility</td></tr>
+      <tr><td colspan="3" class="tag">asset_prices: one row per (asset_id, price_date). Unique constraint prevents duplicates. Source field: "yfinance", "manual", "fidelity_screenshot".</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>tax_lots — the core tax-tracking unit</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">acquisition_date</td><td>Date</td><td>Determines long-term (&ge;366 days) vs short-term</td></tr>
+      <tr><td class="mono">original_quantity</td><td>Numeric(18,8)</td><td>Immutable — never decremented</td></tr>
+      <tr><td class="mono">remaining_quantity</td><td>Numeric(18,8)</td><td>Decremented on sells; 0 triggers <code>is_closed=True</code></td></tr>
+      <tr><td class="mono">cost_basis_per_unit</td><td>Numeric(18,6)</td><td>May be adjusted upward by wash-sale disallowed losses</td></tr>
+      <tr><td class="mono">original_cost_basis_per_unit</td><td>Numeric(18,6)</td><td>Immutable — audit reference</td></tr>
+      <tr><td class="mono">is_wash_sale_adjusted</td><td>Boolean</td><td>True if basis was ever adjusted</td></tr>
+      <tr><td class="mono">wash_sale_disallowed_loss</td><td>Numeric(18,2)</td><td>Cumulative disallowed loss added to this lot's basis</td></tr>
+      <tr><td class="mono">is_closed</td><td>Boolean, indexed</td><td>Fast filter: <code>WHERE is_closed = False</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>approvals — the HITL gate</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">status</td><td>ApprovalStatusEnum</td><td>pending → approved | rejected | expired</td></tr>
+      <tr><td class="mono">action_type</td><td>String(100)</td><td>trade, gift, journal_entry, tax_election</td></tr>
+      <tr><td class="mono">action_payload</td><td>Text (JSON)</td><td>Full action detail for exact replay after approval</td></tr>
+      <tr><td class="mono">expires_at</td><td>DateTime</td><td>Auto-set from policy; trades expire in 72h, gifts/elections in 168h</td></tr>
+      <tr><td class="mono">langgraph_thread_id</td><td>String(200)</td><td>nullable — stored for future agent-resume capability</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Chart of Accounts (27 accounts, seeded on first run)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Code range</th><th>Type</th><th>Examples</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">1010–1900</td><td class="green">Asset</td><td>Cash (1010), Investments (1200), Real Estate (1400)</td></tr>
+      <tr><td class="mono">2010–2900</td><td class="red">Liability</td><td>Accounts Payable (2010), Margin Loan (2100)</td></tr>
+      <tr><td class="mono">3010–3900</td><td class="violet">Equity</td><td>Capital Contributions (3010), Retained Earnings (3500)</td></tr>
+      <tr><td class="mono">4100–4900</td><td class="green">Revenue</td><td>Realized Gains (4100), Dividend Income (4200), Interest (4300)</td></tr>
+      <tr><td class="mono">5010–6900</td><td class="gold">Expense</td><td>Mgmt Fees (5010), Advisory Fees (5100), Tax Prep (6100)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 06 SERVICES -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s06">
+  <div class="section-header">
+    <span class="sec-num">06</span>
+    <span class="sec-emoji">⚡</span>
+    <h2>Services Layer</h2>
+  </div>
+
+  <p>All business logic lives in <code>app/services/</code>. Services are plain Python classes with no FastAPI dependency — they accept a SQLAlchemy <code>Session</code> and return Pydantic schemas or ORM objects. This makes them directly usable from both API routes and LangGraph agent tools.</p>
+
+  <h3>PortfolioService</h3>
+  <ul>
+    <li><strong>get_summary(account_id=None)</strong> — Aggregates all open <code>TaxLot</code> records, fetches current prices, returns <code>PortfolioSummary</code> with market values, cost basis, unrealized P&amp;L, YTD realized gains, and allocation percentages.</li>
+    <li><strong>execute_buy()</strong> — Creates <code>Transaction</code> (BUY) + <code>TaxLot</code>. Fees are folded into cost basis: <code>cpu = (qty × price + fees) / qty</code>.</li>
+    <li><strong>execute_sell()</strong> — Creates <code>Transaction</code> (SELL), selects lots via <code>_select_lots(method)</code>, creates <code>TaxLotDisposal</code> records with <code>realized_gain_loss</code>, decrements lot quantities, calls <code>_check_wash_sale()</code> on any loss disposal.</li>
+    <li><strong>_select_lots(method)</strong> — Supports FIFO (oldest first), LIFO (newest first), HIFO (highest cost first), and specific lot ID.</li>
+    <li><strong>_check_wash_sale(disposal, sale_date)</strong> — Scans for any purchase of the same asset within ±30 days. On match: marks disposal <code>is_wash_sale=True</code>, increments replacement lot's <code>cost_basis_per_unit</code> by the disallowed loss amount, creates <code>WashSaleAdjustment</code>.</li>
+    <li><strong>get_portfolio_history(days=90)</strong> — Returns date-labeled total and per-account values using stored <code>AssetPrice</code> records with forward-fill for missing dates.</li>
+    <li><strong>get_top_movers(limit=10)</strong> — Top gainers and losers by unrealized P&amp;L percent.</li>
+  </ul>
+
+  <h3>MarketDataService</h3>
+  <ul>
+    <li><strong>STABLE_VALUE_SYMBOLS</strong> — Hardcoded set: <code>{CASH, SWTXX, SWVXX, VMFXX, SPAXX, FDRXX, FDLXX, ...}</code>. These always return <strong>$1.00</strong> without querying yfinance. Critical correctness guard — "CASH" is the PGIM Ultra Short Bond ETF on yfinance and would otherwise be priced at ~$86.</li>
+    <li><strong>get_current_price(asset)</strong> — Checks <code>asset_prices</code> cache first (max 3 days old); falls back to yfinance fetch on miss. Private assets always use manual price.</li>
+    <li><strong>_fetch_and_cache(asset)</strong> — <code>yf.Ticker(symbol).history(period="2d")</code>, upserts into <code>asset_prices</code>.</li>
+    <li><strong>bulk_update_prices()</strong> — Iterates all public non-stable assets; skips stable-value symbols.</li>
+  </ul>
+
+  <h3>TaxService</h3>
+  <ul>
+    <li><strong>find_harvest_candidates(min_loss, account_id)</strong> — Scans open lots in taxable accounts, computes unrealized loss at current price, flags wash-sale risk (purchase within 30 days), estimates tax savings at <code>(37% ST or 20% LT) + 3.8% NIIT</code>. Sorted by loss magnitude.</li>
+    <li><strong>get_tax_summary(tax_year)</strong> — Queries disposals for realized gains/losses; queries transactions for dividend and interest income; queries deductible expenses. Estimates liability by splitting income into ST (37%) and LT+qualified-div (20%+3.8% NIIT) buckets. Expenses offset ST income first. Loss carryforward = max(0, |net_loss| − $3,000) per IRC §1211(b).</li>
+    <li><strong>simulate_election(election_type)</strong> — <code>"cost_basis_method"</code>: simulates FIFO/HIFO/LIFO. <code>"section_475"</code>: describes mark-to-market trader status. HIFO flagged as <code>recommended=True</code>.</li>
+  </ul>
+
+  <h3>AccountingService</h3>
+  <ul>
+    <li><strong>create_journal_entry(data)</strong> — Validates debits == credits within $0.01; creates <code>JournalEntry</code> + <code>JournalLine</code> children. All entries immediately posted.</li>
+    <li><strong>auto_journal_for_trade(transaction)</strong> — BUY: debit Investments (1200), credit Cash (1010). SELL: debit Cash, credit Investments, debit/credit Realized Gain/Loss (4100) based on disposal records. DIVIDEND: debit Cash, credit Dividend Income (4200).</li>
+    <li><strong>get_trial_balance(as_of_date)</strong> — Sums all posted lines per COA account up to date.</li>
+    <li><strong>get_income_statement(start, end)</strong> — Revenue and expense balances for the period.</li>
+    <li><strong>get_balance_sheet(as_of_date)</strong> — Asset, liability, and equity balances from inception.</li>
+    <li><strong>seed_chart_of_accounts()</strong> — Creates the standard 27-account COA on first run.</li>
+  </ul>
+
+  <h3>ApprovalService</h3>
+  <ul>
+    <li><strong>check_needs_approval(action_type, amount)</strong> — Queries active policies for trigger type; returns matching <code>ApprovalPolicy</code> if threshold met.</li>
+    <li><strong>create_approval()</strong> — Creates PENDING approval with full JSON <code>action_payload</code>; sets <code>expires_at</code>.</li>
+    <li><strong>decide(id, decision)</strong> — Sets APPROVED or REJECTED; records <code>decision_at</code>.</li>
+    <li><strong>expire_stale()</strong> — Bulk-marks past-<code>expires_at</code> pending approvals as EXPIRED; called on every approvals page load.</li>
+  </ul>
+
+  <h3>EstateService</h3>
+  <ul>
+    <li><strong>record_gift()</strong> — Allocates gift between annual exclusion (per donor→recipient pair per year, up to $18,000) and lifetime exemption (~$13.61M). Charitable gifts (<code>is_charitable=True</code>) skip both allocations entirely — no annual exclusion or lifetime exemption consumed, no Form 709 required. Annual exclusion tracking filters explicitly to the matching recipient (including NULL→NULL for entity/external gifts) to prevent cross-recipient aggregation errors. Form 709 auto-set when non-charitable excess exists.</li>
+    <li><strong>simulate_grat(params)</strong> — Runs GRAT annuity math for each growth rate scenario. Compounds balance annually, subtracts annuity payment, calculates remainder. Tax savings estimated at 40% estate tax rate. Persists each scenario as a <code>GRATSimulation</code> row.</li>
+    <li><strong>get_ownership_tree()</strong> — Returns nested <code>OwnershipNode</code> tree for all active family members with linked accounts and percentages.</li>
+  </ul>
+
+  <h3>ReportingService</h3>
+  <ul>
+    <li><strong>generate_quarterly_report()</strong> — Combines portfolio summary + tax summary, serializes to JSON, saves as <code>GeneratedReport</code>.</li>
+    <li><strong>generate_schedule_d_data(tax_year)</strong> — Produces IRS Form 8949 rows with symbol, acquisition/sale dates, proceeds, cost basis, G/L, ST/LT classification, and wash-sale adjustment amounts.</li>
+    <li><strong>scan_compliance()</strong> — Checks for wash-sale disposals lacking a <code>ComplianceFlag</code>; creates new flags as needed.</li>
+  </ul>
+
+  <h3>MarkovRegimeService</h3>
+  <p>Fits a 3-state (Bull / Sideways / Bear) Markov chain to price history using 20-day cumulative return labeling. Thresholds: Bull &gt;+5%, Bear &lt;−5%, Sideways otherwise. Transition matrix uses Laplace smoothing (ε = 0.01). Stationary distribution computed via left eigenvector of Tᵀ with power-iteration fallback.</p>
+  <ul>
+    <li><strong>get_portfolio_and_ticker_regimes(symbols, weights)</strong> — Single <code>yf.download(period="2y")</code> call for all holding symbols. Computes per-ticker regimes AND a market-value-weighted composite return series ("Portfolio (N positions)") for a portfolio-blended regime. Returns <code>(portfolio_regime, ticker_regime_dict)</code>.</li>
+    <li><strong>get_regime(symbol, lookback_days, prices=None)</strong> — Fits chain for one symbol; accepts a pre-computed price series to avoid redundant downloads.</li>
+    <li><strong>RegimeState schema fields:</strong> <code>current_regime</code>, <code>persist_pct</code>, <code>one_step</code> (T¹), <code>five_step</code> (T⁵), <code>stationary</code>, <code>signal_score</code> (P(Bull)−P(Bear), −1.0 to +1.0), <code>lookback_days</code>.</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 07 API ROUTES -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s07">
+  <div class="section-header">
+    <span class="sec-num">07</span>
+    <span class="sec-emoji">🔌</span>
+    <h2>API Routes</h2>
+  </div>
+
+  <p>All routes return HTML (Jinja2-rendered) except <code>/health</code>, <code>/agent/*</code>, <code>/prices/*</code>, and the Monte Carlo JSON endpoint.</p>
+
+  <h3>Dashboard</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/</td><td>KPI cards (AUM, unrealized P&amp;L, YTD, pending approvals), asset allocation bars, top holdings table, quick links</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Portfolio <code>/portfolio/*</code></h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/</td><td>All positions with market values, unrealized P&amp;L, AI Investment Advisor panel</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/accounts-view</td><td>Per-account card breakdown with colored header gradient</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/trends</td><td>120-day portfolio history charts, allocation donut, top gainers/losers, per-account bar chart</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/trade</td><td>Buy/sell trade form</td></tr>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/portfolio/trade</td><td>Execute buy/sell — routes to approval queue if total &ge;$50k</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/edit/{asset_id}/{account_id}</td><td>Edit position quantity/cost basis</td></tr>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/portfolio/update</td><td>Update position</td></tr>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/portfolio/delete/{asset_id}/{account_id}</td><td>Soft-close all lots for position</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/accounts</td><td>Account list management</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/portfolio/assets</td><td>Asset list management</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Analysis <code>/analysis/*</code></h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/morning?refresh=0</td><td>Daily Brief — AM or PM session, indices, sectors, portfolio day impact, narrative. <code>?refresh=1</code> bypasses cache.</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/</td><td>Risk overview — key metrics + active profile drift summary</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/risk?lookback=252</td><td>Detailed risk: volatility, Sharpe, max drawdown, beta, VaR/CVaR (95%/99%), per-position risk contribution, correlation heatmap tab, TWR tab</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/api/correlation?lookback_days=N</td><td>JSON — N×N Pearson correlation matrix of daily returns for all holdings with price history</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/api/returns</td><td>JSON — Time-Weighted Return: 1yr, 3yr, 5yr, inception (annualised)</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/profiles</td><td>Investment profile list — activate, create custom, delete</td></tr>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/analysis/profiles/{id}/activate</td><td>Set active profile (deactivates all others)</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/rebalance</td><td>Drift analysis vs active profile; rebalance action list with dollar amounts</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/analysis/monte-carlo?years=&simulations=&goal=</td><td>Two-phase Monte Carlo page — accumulation fan + distribution fan, monthly deposits, Markov regime conditioning, withdrawal rate &amp; years, survival rate. New params: <code>monthly_contribution</code>, <code>withdrawal_rate</code>, <code>withdrawal_years</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Tax <code>/tax/*</code></h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/tax/harvest</td><td>Tax-loss harvest candidates with estimated savings</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/tax/summary?tax_year=</td><td>Annual tax summary: gains/losses, income, deductions, estimated liability</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/tax/elections</td><td>Cost basis election simulation + Section 475 analysis</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Agent <code>/agent/*</code> — JSON endpoints</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Returns</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/agent/invoke</td><td><code>{response: str}</code></td><td>Routes to LangGraph supervisor; supports all 6 specialist domains</td></tr>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/agent/portfolio-advice</td><td><code>{response: str}</code></td><td>Direct Anthropic API call with full portfolio context embedded in system prompt. No tool calls needed — data is pre-loaded from server side.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Prices <code>/prices/*</code> — JSON endpoints</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill pill-green">POST</span></td><td class="mono">/prices/refresh</td><td>Bulk yfinance price fetch for all public, non-stable-value assets</td></tr>
+      <tr><td><span class="pill pill-blue">GET</span></td><td class="mono">/prices/status</td><td>Price freshness: total public assets, updated today count, latest price date</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 08 TEMPLATES -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s08">
+  <div class="section-header">
+    <span class="sec-num">08</span>
+    <span class="sec-emoji">🖥️</span>
+    <h2>Templates &amp; UI</h2>
+  </div>
+
+  <p>All 31 Jinja2 templates extend <code>base.html</code>. Styling is entirely <strong>Tailwind CSS</strong> (CDN); charts use <strong>Chart.js 4</strong>. Sub-navigation within Portfolio and Analysis sections is handled by shared partials (<code>_subnav.html</code>).</p>
+
+  <h3>base.html — Layout Shell</h3>
+  <ul>
+    <li>Full-width dark slate navbar with links: Dashboard, Portfolio, Tax, Accounting, Reports, Estate, Analysis, Approvals</li>
+    <li>Active nav item highlighted by matching <code>page_title</code> against a list of known values per section</li>
+    <li>Right side: privacy toggle button (eye icon) — see <a href="#s09">§09</a></li>
+    <li>Bottom-right: floating AI chat bubble (slide-up panel, calls <code>/agent/invoke</code>)</li>
+    <li>Pending approvals badge (red dot count) on the Approvals nav item</li>
+    <li>Privacy mode CSS and early-apply <code>&lt;head&gt;</code> script — see <a href="#s09">§09</a></li>
+  </ul>
+
+  <h3>Key Pages</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Template</th><th>Route</th><th>Notable Features</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">dashboard.html</td><td>/</td><td>4 KPI cards, allocation bars, top-10 holdings table, tax summary, quick links</td></tr>
+      <tr><td class="mono">portfolio/overview.html</td><td>/portfolio/</td><td>Full holdings table + AI Investment Advisor panel (collapsible, 6 prompt chips, live context)</td></tr>
+      <tr><td class="mono">portfolio/accounts_overview.html</td><td>/portfolio/accounts-view</td><td>Per-account gradient cards with P&amp;L coloring; top-3 holdings per account</td></tr>
+      <tr><td class="mono">portfolio/trends.html</td><td>/portfolio/trends</td><td>Line chart (total + by-account toggle); allocation donut; gainers/losers with bar indicators; account bar chart</td></tr>
+      <tr><td class="mono">analysis/morning.html</td><td>/analysis/morning</td><td>Session badge (AM/PM), macro indices grid, sector heatmap sorted by performance, portfolio day-impact table, narrative paragraph</td></tr>
+      <tr><td class="mono">analysis/monte_carlo.html</td><td>/analysis/monte-carlo</td><td>Fan chart with P10–P90 bands for current + target allocation; goal line overlay; probability of reaching goal</td></tr>
+      <tr><td class="mono">analysis/risk.html</td><td>/analysis/risk</td><td>Portfolio-level vol/Sharpe/drawdown/beta; per-position volatility and beta; concentration (HHI) and asset-class risk breakdown</td></tr>
+      <tr><td class="mono">approvals/pending.html</td><td>/approvals/</td><td>Pending approval cards with full action detail; Approve/Reject buttons; auto-expire on page load</td></tr>
+      <tr><td class="mono">estate/grat_sim.html</td><td>/estate/grat</td><td>Multi-scenario table (4–10% growth rates) with remainder values color-coded green when positive</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>AI Investment Advisor Panel (portfolio/overview.html)</h3>
+  <p>The collapsible violet panel at the bottom of the holdings page injects a live portfolio snapshot into the <code>PORTFOLIO_CONTEXT</code> JavaScript constant (server-side via <code>{{ portfolio_context | tojson }}</code>). When the user clicks Ask, it POSTs to <code>/agent/portfolio-advice</code> with the message and this pre-loaded context — no additional network call for data needed. See <a href="#s10">§10</a> for the direct Anthropic path.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 09 PRIVACY MODE -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s09">
+  <div class="section-header">
+    <span class="sec-num">09</span>
+    <span class="sec-emoji">🔒</span>
+    <h2>Privacy Mode</h2>
+  </div>
+
+  <p>Privacy mode replaces every dollar balance on every page with <code>•••••</code>. It is implemented entirely in CSS with no re-render, no additional API call, and <strong>no flash of unprotected content</strong>.</p>
+
+  <h3>Implementation</h3>
+  <p>Every monetary value in every template is wrapped in a <code>&lt;span class="bal"&gt;</code>. The CSS in <code>base.html</code> targets <code>.privacy-mode .bal</code>:</p>
+  <pre><code>/* Applied to &lt;html&gt; before first paint — no flash */
+.privacy-mode .bal {
+    font-size: 0 !important;
+    letter-spacing: 0 !important;
+    white-space: nowrap;
+    display: inline-block;
+    min-width: 3.5ch;
+}
+.privacy-mode .bal::after {
+    content: "•••••";
+    font-size: 0.9rem;
+    letter-spacing: 0.06em;
+    color: inherit;
+    font-weight: inherit;
+}
+/* Size variants for larger headings */
+.privacy-mode .bal-lg::after { font-size: 1.3rem; }
+.privacy-mode .bal-xl::after { font-size: 1.8rem; }</code></pre>
+
+  <h3>Flash prevention</h3>
+  <p>An inline <code>&lt;script&gt;</code> in the <code>&lt;head&gt;</code> runs before the first paint:</p>
+  <pre><code>if (localStorage.getItem('kfo_privacy') === '1') {
+  document.documentElement.classList.add('privacy-mode');
+}</code></pre>
+
+  <h3>Toggle mechanics</h3>
+  <pre><code>function togglePrivacy() {
+  const on = document.documentElement.classList.toggle('privacy-mode');
+  localStorage.setItem('kfo_privacy', on ? '1' : '0');
+  _syncPrivacyUI(on);  // swaps eye/eye-off icon and Hide/Show label
+}</code></pre>
+
+  <h3>Coverage</h3>
+  <p><code>bal</code> spans are applied across all 31 templates covering: Dashboard KPI cards, portfolio holdings table, account cards, trends KPI row, daily brief indices/holdings, Monte Carlo outcome cards, tax summary figures, tax harvest amounts, GRAT simulation values, gifting table, accounting journal totals, trial balance, financial statements, and edit-position cost basis displays.</p>
+
+  <div class="callout callout-green">
+    <span class="callout-icon">✅</span>
+    <div class="callout-body"><p>The technique is robust because it uses CSS class toggling on <code>&lt;html&gt;</code> — a single DOM write. No JavaScript needs to iterate the DOM to find balance elements. No page navigation clears the state (localStorage persists across pages).</p></div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 10 AI AGENT SYSTEM -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s10">
+  <div class="section-header">
+    <span class="sec-num">10</span>
+    <span class="sec-emoji">🤖</span>
+    <h2>AI Agent System</h2>
+  </div>
+
+  <h3>Architecture — Two Paths</h3>
+
+  <p>The AI system has two distinct invocation paths:</p>
+  <ol>
+    <li><strong>LangGraph Supervisor</strong> (<code>/agent/invoke</code>) — Full multi-agent graph for general questions. Routes to one of six specialist agents, each with domain-specific tools that call the service layer.</li>
+    <li><strong>Direct Anthropic Call</strong> (<code>/agent/portfolio-advice</code>) — Bypasses LangGraph entirely for portfolio questions. Live data is pre-embedded in the system prompt; no tool calls needed. Significantly faster for portfolio-specific queries.</li>
+  </ol>
+
+  <h3>LangGraph Supervisor Graph</h3>
+  <div class="flow">
+<span class="node">POST /agent/invoke</span><br>
+<span class="arrow">  ↓</span><br>
+<span class="node">build_supervisor()</span>  <span class="dim">→ compiled LangGraph with FamilyOfficeState</span><br>
+<span class="arrow">  ↓</span><br>
+<span class="label">Supervisor LLM</span>  <span class="dim">(Claude claude-sonnet-4-5 or OpenAI fallback)</span><br>
+<span class="cond">  ↙ routes to one of six specialist agents ↘</span><br><br>
+<span class="node">portfolio_agent</span>   <span class="node">tax_agent</span>   <span class="node">accounting_agent</span><br>
+<span class="node">reporting_agent</span>   <span class="node">estate_agent</span>   <span class="node">analysis_agent</span><br><br>
+<span class="arrow">  ↓</span><br>
+<span class="label">Agent executes tool calls</span>  <span class="dim">→ service layer → SQLite</span><br>
+<span class="arrow">  ↓</span><br>
+<span class="node">Supervisor formulates response</span><br>
+<span class="arrow">  ↓</span><br>
+<span class="node">JSON {response: str}</span>
+  </div>
+
+  <h3>Shared State</h3>
+  <p><code>FamilyOfficeState</code> (<code>app/agents/state.py</code>) is a <code>TypedDict</code> with:</p>
+  <ul>
+    <li><code>messages</code> — accumulates via LangGraph's <code>add_messages</code> reducer</li>
+    <li><code>pending_approvals: list[dict]</code> — carries approval context across agents</li>
+    <li><code>current_agent: str | None</code> — tracks active agent</li>
+    <li><code>context: dict</code> — session metadata (date ranges, entity selection)</li>
+  </ul>
+
+  <h3>Specialist Agents &amp; Tools</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Agent</th><th>Tools</th><th>Has Approval Tools?</th></tr></thead>
+    <tbody>
+      <tr><td><strong>portfolio_agent</strong></td><td>get_portfolio_summary, get_market_quote, get_open_tax_lots, execute_buy_trade, execute_sell_trade</td><td class="green">Yes</td></tr>
+      <tr><td><strong>tax_agent</strong></td><td>find_harvest_candidates, get_tax_summary, simulate_tax_election</td><td class="green">Yes</td></tr>
+      <tr><td><strong>accounting_agent</strong></td><td>get_trial_balance, get_income_statement, get_balance_sheet, get_journal_entries</td><td class="red">No</td></tr>
+      <tr><td><strong>reporting_agent</strong></td><td>generate_quarterly_report, generate_schedule_d, check_compliance, get_compliance_flags</td><td class="red">No</td></tr>
+      <tr><td><strong>estate_agent</strong></td><td>get_ownership_tree, get_gift_history, simulate_grat, get_annual_exclusion_remaining, get_lifetime_exemption_remaining</td><td class="green">Yes</td></tr>
+      <tr><td><strong>analysis_agent</strong></td><td>get_risk_metrics, get_allocation_drift, list_investment_profiles, set_investment_profile, run_monte_carlo_simulation</td><td class="red">No</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Portfolio Advice — Direct Path</h3>
+  <p>The <code>PORTFOLIO_ADVISOR_SYSTEM</code> prompt establishes the advisor role. A live snapshot is appended at request time:</p>
+  <pre><code>system = PORTFOLIO_ADVISOR_SYSTEM
+if context.strip():
+    system += f"\n\n--- LIVE PORTFOLIO SNAPSHOT ---\n{context.strip()}\n--- END SNAPSHOT ---"
+
+response = client.messages.create(
+    model=settings.llm_model,
+    max_tokens=1024,
+    system=system,
+    messages=[{"role": "user", "content": message}],
+)</code></pre>
+
+  <p>The <code>PORTFOLIO_CONTEXT</code> injected server-side includes: total AUM, cost basis, unrealized P&amp;L, allocation by asset class (%), and a full JSON array of all holdings with symbol, account, quantity, cost, market value, unrealized G/L, and weight.</p>
+
+  <h3>Fallback Supervisor</h3>
+  <p>If neither <code>KFO_ANTHROPIC_API_KEY</code> nor <code>KFO_OPENAI_API_KEY</code> is configured, <code>build_supervisor()</code> returns a <code>FallbackSupervisor</code> that returns a plain explanation message. The web UI remains fully functional for all non-AI features.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 11 DAILY BRIEF -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s11">
+  <div class="section-header">
+    <span class="sec-num">11</span>
+    <span class="sec-emoji">📰</span>
+    <h2>Daily Market Brief</h2>
+  </div>
+
+  <p>The morning (or evening) brief aggregates macro market data and per-position portfolio impact. It is <strong>session-cached</strong> at the module level — the expensive yfinance bulk download runs at most twice per trading day regardless of how many times the page is loaded.</p>
+
+  <h3>Session Keying</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Time (ET)</th><th>Cache Key</th><th>Report Title</th><th>Next Update</th></tr></thead>
+    <tbody>
+      <tr><td>Midnight – 4:05 PM</td><td class="mono">YYYY-MM-DD-AM</td><td>Morning Brief</td><td>"at market close (4:05 PM ET)"</td></tr>
+      <tr><td>4:05 PM – Midnight</td><td class="mono">YYYY-MM-DD-PM</td><td>Evening Report</td><td>"at market open tomorrow"</td></tr>
+      <tr><td>Saturday / Sunday</td><td class="mono">YYYY-MM-DD-AM</td><td>Weekend Summary</td><td>"at market open Monday"</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Data Fetched per Session</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Category</th><th>Symbols</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Macro indices</strong></td><td>SPY, QQQ, DIA, IWM, ^VIX, TLT, GLD, USO, UUP, BTC-USD</td></tr>
+      <tr><td><strong>Sector ETFs</strong></td><td>XLK, XLV, XLF, XLE, XLI, XLY, XLP, XLU, XLB, XLRE, XLC</td></tr>
+      <tr><td><strong>Portfolio positions</strong></td><td>All currently open lots — uses stored AssetPrice for yesterday's close</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Portfolio Day Impact</h3>
+  <p>For each open lot, the service fetches today's price and yesterday's price from <code>asset_prices</code>, computes <code>day_change = (today - yesterday) / yesterday × 100</code>, and multiplies by market value to get the dollar impact. The portfolio total day P&amp;L is the sum of all position impacts.</p>
+
+  <h3>Narrative Generation</h3>
+  <p>The <code>_build_narrative()</code> method generates 5–7 English sentences covering:</p>
+  <ol>
+    <li>S&amp;P direction and magnitude</li>
+    <li>VIX level (elevated/low)</li>
+    <li>Bond/equity relationship (TLT direction vs SPY)</li>
+    <li>Top sector leader and laggard</li>
+    <li>Gold / Bitcoin moves if notable (&gt;1%)</li>
+    <li>Portfolio day change and direction</li>
+  </ol>
+
+  <h3>Markov Regime Detection</h3>
+  <p>Each time the brief is built (on cache miss or force-refresh), <code>MarkovRegimeService.get_portfolio_and_ticker_regimes()</code> is called with all holding symbols and their market-value weights. A single <code>yf.download(period="2y")</code> fetches 2 years of price data for all holdings simultaneously.</p>
+  <p><strong>Portfolio-blended regime:</strong> Rather than using a proxy like SPY, the service builds a weighted composite daily return series from all holdings and runs the Markov chain on that series. This reflects your actual portfolio risk exposure — critical for portfolios with significant non-equity exposure (bonds, gold, crypto, alternatives).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Regime</th><th>Label Threshold (20-day cumulative return)</th><th>Monte Carlo adjustment (yr 1)</th></tr></thead>
+    <tbody>
+      <tr><td class="green">🐂 Bull</td><td>&gt; +5%</td><td>+2% expected return, −10% volatility</td></tr>
+      <tr><td>↔ Sideways</td><td>−5% to +5%</td><td>No adjustment</td></tr>
+      <tr><td class="red">🐻 Bear</td><td>&lt; −5%</td><td>−3% expected return, +20% volatility</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Per-ticker badges:</strong> Each row in the "All Positions" holdings table shows a micro-badge (↑ Bull / ↓ Bear / ~ Sideways) next to the symbol, with a tooltip showing regime name and signal score.</p>
+  <p><strong>Regime detail panel:</strong> When a portfolio regime is available, the brief page shows a 3-column bar chart comparing Long-Run Equilibrium, Tomorrow (T¹), and 1-Week (T⁵) probability distributions across Bull / Sideways / Bear states.</p>
+  <p><strong>Narrative bullet:</strong> The narrative paragraph includes a regime sentence, e.g. "🐂 Markov regime: Bull (signal +0.42). Long-run equilibrium: 55% Bull / 30% Sideways / 15% Bear."</p>
+  <div class="callout callout-info">
+    <span class="callout-icon">ℹ️</span>
+    <div class="callout-body"><p>Regime data is only recomputed when the brief cache is busted. Clicking <strong>Refresh Now</strong> on the Daily Brief page triggers a full rebuild including fresh Markov fits. Monte Carlo always recomputes regime live (no cache).</p></div>
+  </div>
+
+  <h3>Force Refresh</h3>
+  <p>Append <code>?refresh=1</code> to <code>/analysis/morning</code> to bypass the session cache and fetch fresh data immediately. Useful after a big mid-session market move.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 12 RISK & ANALYSIS -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s12">
+  <div class="section-header">
+    <span class="sec-num">12</span>
+    <span class="sec-emoji">📈</span>
+    <h2>Risk &amp; Portfolio Analysis</h2>
+  </div>
+
+  <h3>Risk Metrics (AnalysisService)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Metric</th><th>Calculation</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Portfolio Volatility</strong></td><td><code>portfolio_std × √252</code></td><td>Annualized, 252-day basis</td></tr>
+      <tr><td><strong>Sharpe Ratio</strong></td><td><code>(annualized_return − risk_free) / volatility</code></td><td>Default risk-free = 5%</td></tr>
+      <tr><td><strong>Max Drawdown</strong></td><td><code>min((V_t − peak_t) / peak_t)</code></td><td>Returns peak date, trough date</td></tr>
+      <tr><td><strong>Portfolio Beta</strong></td><td><code>cov(portfolio, SPY) / var(SPY)</code></td><td>SPY fetched over same lookback window</td></tr>
+      <tr><td><strong>HHI Concentration</strong></td><td><code>Σ(w_i%)²</code></td><td>DOJ convention — weights as percentages; 100% single-holding = 10,000</td></tr>
+      <tr><td><strong>Per-position Beta</strong></td><td><code>cov(pos_returns, SPY) / var(SPY)</code></td><td></td></tr>
+      <tr><td><strong>Risk Contribution %</strong></td><td><code>w_i × Cov(r_i, r_p)_annual / Var(r_p)_annual × 100</code></td><td>Exact Euler decomposition — contributions sum to 100%</td></tr>
+      <tr><td><strong>1-Day VaR (95%)</strong></td><td><code>|5th-percentile daily return| × portfolio_AUM</code></td><td>Historical simulation, no normality assumption</td></tr>
+      <tr><td><strong>CVaR / ES (95%)</strong></td><td><code>|mean(returns below VaR)| × portfolio_AUM</code></td><td>Expected Shortfall — captures tail severity beyond VaR</td></tr>
+      <tr><td><strong>VaR / CVaR (99%)</strong></td><td>Same as above at 1st percentile</td><td>Worst-1% of days expected loss</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout callout-info">
+    <span class="callout-icon">⚡</span>
+    <div class="callout-body"><p><strong>Performance optimization:</strong> <code>_bulk_daily_returns()</code> issues a single <code>yf.download()</code> call for all symbols simultaneously — orders of magnitude faster than per-ticker calls. It first checks DB cache for stored <code>asset_prices</code> (with a ±99% sanity check to reject corrupted history), then fetches only the symbols with cache misses.</p></div>
+  </div>
+
+  <h3>Asset Class Assumptions (for private/illiquid assets)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Class</th><th>Annual Return</th><th>Volatility</th></tr></thead>
+    <tbody>
+      <tr><td>us_equity</td><td class="green">10%</td><td>16%</td></tr>
+      <tr><td>intl_equity</td><td class="green">8%</td><td>18%</td></tr>
+      <tr><td>fixed_income</td><td class="green">4%</td><td>5%</td></tr>
+      <tr><td>real_estate</td><td class="green">7%</td><td>12%</td></tr>
+      <tr><td>private_equity</td><td class="green">12%</td><td>22%</td></tr>
+      <tr><td>venture_capital</td><td class="green">15%</td><td>30%</td></tr>
+      <tr><td>crypto</td><td class="green">15%</td><td class="red">60%</td></tr>
+      <tr><td>cash</td><td class="green">4%</td><td class="green">0.5%</td></tr>
+      <tr><td>commodity</td><td class="green">5%</td><td>20%</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Correlation Matrix</h3>
+  <p>Pairwise Pearson correlation of daily log-returns for all holdings with price history, via <code>get_correlation_matrix(lookback_days=252)</code>. Returns an N×N <code>CorrelationMatrix</code> schema. Rendered on the Risk page's Correlation Heatmap tab using an HTML Canvas drawing — blue = positive correlation, red = negative, white = zero. Available as JSON at <code>GET /analysis/api/correlation?lookback_days=N</code>.</p>
+
+  <h3>Time-Weighted Return (TWR)</h3>
+  <p><code>get_return_metrics()</code> chain-links daily sub-period returns (product of 1 + r_t) over 1-year, 3-year, 5-year, and since-inception windows, then annualises via <code>(cumulative + 1)^(1/years) − 1</code>. Requires holdings price history in the DB; private/illiquid positions are excluded. Results exposed at <code>GET /analysis/api/returns</code> and displayed in the "Return Metrics (TWR)" tab of the Risk page.</p>
+
+  <h3>Monte Carlo Simulation — Two-Phase</h3>
+  <p>Log-normal Geometric Brownian Motion (GBM) with annual steps, using Ito's lemma correction: <code>drift = μ − 0.5σ²</code>. Portfolio μ and σ are weighted-average asset-class parameters (uncorrelated assumption). The simulation runs two phases sequentially: <strong>Accumulation</strong> then optionally <strong>Distribution</strong>.</p>
+
+  <h4>Accumulation Phase</h4>
+  <p>Standard GBM with optional monthly deposit model using a mid-year approximation (deposits assumed to arrive uniformly throughout the year, earning on average √gf in growth):</p>
+  <pre><code>drift = port_mu - 0.5 * port_sigma²
+growth_factors = exp( rng.normal(drift, port_sigma, (num_sims, years)) )
+
+# With monthly deposits (mid-year approximation):
+for y in range(years):
+    gf = growth_factors[:, y]
+    port = port * gf + annual_contrib * sqrt(gf)   # √gf = ~6-month growth
+
+# Without deposits:
+cumulative = cumprod(growth_factors, axis=1) * initial_value</code></pre>
+
+  <h4>Markov Regime Conditioning</h4>
+  <p>The accumulation phase adjusts Year 1 and Year 2 parameters based on the current portfolio regime (blend schedule: 100% regime in Year 1, 50% in Year 2, base assumptions from Year 3 onward):</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Regime</th><th>μ adjustment (yr 1)</th><th>σ adjustment (yr 1)</th></tr></thead>
+    <tbody>
+      <tr><td class="green">Bull</td><td>+2%</td><td>×0.90 (−10%)</td></tr>
+      <tr><td>Sideways</td><td>0</td><td>×1.00</td></tr>
+      <tr><td class="red">Bear</td><td>−3%</td><td>×1.20 (+20%)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Distribution / Withdrawal Phase</h4>
+  <p>Activated when <code>withdrawal_rate &gt; 0</code> and <code>withdrawal_years &gt; 0</code>. The dollar withdrawal is computed once per simulation from its own ending accumulation value — making it constant across all distribution years within that path (classic "4% rule" framing). No regime conditioning applies in this phase.</p>
+  <pre><code># Per-simulation constant annual withdrawal (4% rule)
+annual_wdraw = final_vals * (withdrawal_rate / 100.0)
+
+# Distribution loop — grow first, then withdraw; floor at 0 (ruin)
+for y in range(withdrawal_years):
+    port_d = maximum(port_d * dist_gf[:, y] - annual_wdraw, 0.0)</code></pre>
+  <p><strong>Survival rate</strong> = fraction of simulations where portfolio &gt; 0 at end of distribution phase. Color-coded: ≥90% green (highly sustainable), ≥70% amber (moderate risk), &lt;70% red (high ruin probability).</p>
+
+  <h4>Chart — Retirement Anchor &amp; Phase Boundary</h4>
+  <p>The Chart.js fan chart shows two colored fans joined at the retirement year. The first point of the distribution (orange) fan is the retirement <em>starting value</em> — the exact same value as the last accumulation (blue) fan point. This anchors both fans at the same pixel and makes the slope change (contributions stop + withdrawals begin) visually obvious as a kink at the "Retirement" dashed divider line.</p>
+  <p>Each simulation's distribution phase starts from its <em>own</em> accumulation ending value — lower-outcome simulations carry their lower starting point all the way through distribution, so the P10 / median / P90 bands remain causally linked across phases (78% cross-percentile continuity at the first distribution year).</p>
+
+  <h4>Result Fields</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">final_median / p10 / p90</td><td>End-of-accumulation portfolio values</td></tr>
+      <tr><td class="mono">probability_of_goal</td><td>% of simulations ending ≥ goal_amount</td></tr>
+      <tr><td class="mono">regime_context</td><td>"Bull" | "Sideways" | "Bear" | "Base"</td></tr>
+      <tr><td class="mono">monthly_contribution</td><td>Monthly deposit amount used in simulation</td></tr>
+      <tr><td class="mono">withdrawal_annual_amount</td><td>Median annual withdrawal (= median final_val × rate)</td></tr>
+      <tr><td class="mono">withdrawal_total</td><td>Median total withdrawn over distribution years</td></tr>
+      <tr><td class="mono">withdrawal_final_median / p10 / p90</td><td>Portfolio values at end of distribution phase</td></tr>
+      <tr><td class="mono">portfolio_survival_rate</td><td>% of simulations with portfolio &gt; 0 at end</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Investment Profiles</h3>
+  <p>Five system profiles are seeded on first run. Only one can be active at a time.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Profile</th><th>US Equity</th><th>Intl Equity</th><th>Fixed Income</th><th>Cash</th></tr></thead>
+    <tbody>
+      <tr><td>Conservative</td><td>20%</td><td>10%</td><td>55%</td><td>15%</td></tr>
+      <tr><td>Moderate</td><td>35%</td><td>15%</td><td>40%</td><td>10%</td></tr>
+      <tr><td><strong>Balanced</strong> (default active)</td><td>45%</td><td>20%</td><td>25%</td><td>5%</td></tr>
+      <tr><td>Growth</td><td>60%</td><td>25%</td><td>10%</td><td>5%</td></tr>
+      <tr><td>Aggressive</td><td>70%</td><td>20%</td><td>5%</td><td>5%</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 13 TAX -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s13">
+  <div class="section-header">
+    <span class="sec-num">13</span>
+    <span class="sec-emoji">💰</span>
+    <h2>Tax &amp; Compliance</h2>
+  </div>
+
+  <h3>Tax Rates (2026 approximate)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Rate Type</th><th>Value</th><th>Applies to</th></tr></thead>
+    <tbody>
+      <tr><td>Short-term capital gains</td><td class="red">37%</td><td>ST gains + interest income (ordinary rate, top bracket)</td></tr>
+      <tr><td>Long-term capital gains</td><td class="gold">20%</td><td>LT gains + qualified dividends (held ≥ 366 days)</td></tr>
+      <tr><td>Net Investment Income Tax (NIIT)</td><td class="gold">3.8%</td><td>Added to LT rate for total 23.8% on investment income</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Tax Liability Calculation</h3>
+  <p><code>get_tax_summary()</code> splits income into two buckets and taxes each at its correct rate:</p>
+  <pre><code># Short-term bucket: ST gains + interest → 37%
+st_taxable = (st_gains + st_losses) + interest
+# Long-term bucket: LT gains + qualified dividends → 20% + 3.8% NIIT
+lt_taxable = (lt_gains + lt_losses) + dividends
+# Deductible expenses offset highest-rate income first (ST bucket)
+st_after = max(0, st_taxable - expenses)
+remaining_expenses = max(0, expenses - st_taxable)
+lt_after = max(0, lt_taxable - remaining_expenses)
+estimated_tax = st_after × 0.37 + lt_after × 0.238
+# IRC §1211(b): first $3,000 of net loss deductible vs ordinary income; remainder carries forward
+loss_carryforward = max(0, |net_loss| - 3000)</code></pre>
+
+  <h3>Tax-Loss Harvesting Logic</h3>
+  <ol>
+    <li>Query all open <code>TaxLot</code> records in taxable accounts (<code>is_taxable=True</code>)</li>
+    <li>Aggregate by (asset, account) — sum remaining quantities and cost basis per unit</li>
+    <li>Fetch current price; compute unrealized loss = (current_price − cpu) × qty</li>
+    <li>Flag wash-sale risk: check for any purchase of same asset within 30 days of today</li>
+    <li>Estimate tax savings: <code>|loss| × (rate + NIIT)</code> where rate = 37% if short-term, 20% if long-term</li>
+    <li>Return <code>HarvestCandidate</code> list sorted by loss magnitude (most negative first)</li>
+  </ol>
+
+  <h3>Wash-Sale Detection (at sell time)</h3>
+  <div class="flow">
+<span class="label">execute_sell()</span><br>
+<span class="arrow">  ↓ for each loss disposal</span><br>
+<span class="node">_check_wash_sale(disposal, sale_date)</span><br>
+<span class="arrow">  ↓</span><br>
+<span class="cond">Was same asset purchased within sale_date ± 30 days?</span><br>
+<span class="cond">  ↙ Yes                              No ↘</span><br>
+<span class="node">Mark disposal is_wash_sale=True</span>   <span class="dim">No action</span><br>
+<span class="node">cpu += disallowed_loss / original_quantity (not remaining_qty)</span><br>
+<span class="node">Create WashSaleAdjustment audit record</span>
+  </div>
+
+  <h3>Schedule D / Form 8949 Generation</h3>
+  <p>Queries all <code>TaxLotDisposal</code> records for the tax year, producing rows with: symbol, description, acquisition date, sale date, proceeds, cost basis, wash sale adjustment, net gain/loss, and short/long-term classification. Output is stored as JSON in <code>GeneratedReport.content_json</code>.</p>
+
+  <h3>Cost Basis Election Simulation</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Description</th><th>Recommended?</th></tr></thead>
+    <tbody>
+      <tr><td>FIFO</td><td>Oldest lots sold first — typically lowest remaining cost basis</td><td>No</td></tr>
+      <tr><td>HIFO</td><td>Highest cost basis lots sold first — minimizes realized gain</td><td class="green">Yes</td></tr>
+      <tr><td>LIFO</td><td>Most recently acquired lots sold first</td><td>No</td></tr>
+      <tr><td>Section 475</td><td>Mark-to-market trader status — all gains/losses ordinary</td><td>Informational only</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 14 ESTATE PLANNING -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s14">
+  <div class="section-header">
+    <span class="sec-num">14</span>
+    <span class="sec-emoji">🏛️</span>
+    <h2>Estate Planning</h2>
+  </div>
+
+  <h3>Gift Tracking</h3>
+  <ul>
+    <li><strong>Annual exclusion (2026):</strong> $18,000 per donor-recipient pair. First $18k of any gift applies here.</li>
+    <li><strong>Lifetime exemption:</strong> ~$13.61M per donor. Amounts above the annual exclusion consume lifetime exemption.</li>
+    <li><strong>Form 709:</strong> Auto-flagged (<code>form_709_filed=True</code>) when any gift exceeds the annual exclusion.</li>
+    <li><strong>In-kind gifts:</strong> Assets can be gifted with a linked <code>asset_id</code> and <code>donor_cost_basis</code>.</li>
+    <li><strong>Charitable gifts:</strong> Tracked separately with <code>is_charitable=True</code>.</li>
+  </ul>
+
+  <h3>GRAT Simulation</h3>
+  <p>A Grantor Retained Annuity Trust lets the grantor transfer appreciation above the Section 7520 hurdle rate to beneficiaries tax-free. The simulation:</p>
+
+  <ol>
+    <li>Compute annuity payment: <code>funding × (rate / (1 − (1 + rate)^(−term)))</code></li>
+    <li>For each growth rate scenario (default: 4%, 6%, 8%, 10%):
+      <ul>
+        <li>Compound balance annually by growth rate</li>
+        <li>Subtract annuity payment each year</li>
+        <li>Remainder after term = wealth transferred tax-free (if &gt;0)</li>
+      </ul>
+    </li>
+    <li>Tax savings estimate: <code>remainder × 40%</code> (estate tax rate)</li>
+    <li>Rows with remainder &gt;0 highlighted green — the trust "wins" when growth &gt; 7520 rate</li>
+  </ol>
+
+  <h3>Ownership Tree</h3>
+  <p>The <code>ownership</code> table maps family members and entities to accounts with percentage ownership. The <code>get_ownership_tree()</code> method returns a nested structure showing who owns what and at what percentage — useful for estate tax exposure analysis.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 15 APPROVAL SYSTEM -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s15">
+  <div class="section-header">
+    <span class="sec-num">15</span>
+    <span class="sec-emoji">✅</span>
+    <h2>Human-in-the-Loop Approval System</h2>
+  </div>
+
+  <p>The approval system is the <strong>central safety mechanism</strong> of the platform. No material financial action executes without passing through it.</p>
+
+  <h3>Default Policies</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Policy Name</th><th>Trigger Type</th><th>Threshold</th><th>Expiry</th></tr></thead>
+    <tbody>
+      <tr><td>Large Trade</td><td>trade_amount</td><td>$50,000</td><td>72 hours</td></tr>
+      <tr><td>All Gifts</td><td>gift</td><td>None (always)</td><td>168 hours (7 days)</td></tr>
+      <tr><td>Tax Election</td><td>tax_election</td><td>None (always)</td><td>168 hours</td></tr>
+      <tr><td>Manual Journal</td><td>journal_manual</td><td>$10,000</td><td>72 hours</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Approval Lifecycle</h3>
+  <div class="flow">
+<span class="label">Material action requested</span>  (trade, gift, election, journal)<br>
+<span class="arrow">  ↓</span><br>
+<span class="node">ApprovalService.check_needs_approval(action_type, amount)</span><br>
+<span class="cond">  ↙ Policy matches           No match ↘</span><br>
+<span class="node">create_approval(payload JSON)</span>   <span class="node">Execute immediately</span><br>
+<span class="node">Redirect → /approvals/</span><br>
+<span class="dim">  [Principal reviews in web UI]</span><br>
+<span class="cond">  ↙ APPROVED              REJECTED ↘</span><br>
+<span class="node">_execute_approved_trade()</span>    <span class="node">Action discarded</span><br>
+<span class="node">or execute gift / journal</span>
+  </div>
+
+  <h3>Action Payload</h3>
+  <p>The full trade payload is stored as JSON in <code>approval.action_payload</code>. For a buy trade this includes: <code>account_id</code>, <code>asset_id</code>, <code>quantity</code>, <code>price_per_unit</code>, <code>total_amount</code>, <code>notes</code>. On approval, <code>_execute_approved_trade()</code> deserializes this payload and calls <code>PortfolioService.execute_buy()</code> with the original parameters — exactly as if the user had submitted it directly. No information loss.</p>
+
+  <h3>Auto-Expiry</h3>
+  <p><code>expire_stale()</code> is called on every page load of <code>GET /approvals/</code>. Any pending approval past its <code>expires_at</code> timestamp is bulk-marked EXPIRED before the page renders. The Principal sees only currently valid approvals.</p>
+
+  <div class="callout callout-warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body"><p><strong>LangGraph resume not yet wired:</strong> The <code>langgraph_thread_id</code> column exists on <code>Approval</code> and <code>sse-starlette</code> is declared as a dependency — the structural foundation for resuming a paused agent graph after human approval is in place, but the agent-side resume logic is not yet implemented. Approved actions currently execute via direct service calls.</p></div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 16 DATA FLOWS -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s16">
+  <div class="section-header">
+    <span class="sec-num">16</span>
+    <span class="sec-emoji">🔄</span>
+    <h2>Data Flows</h2>
+  </div>
+
+  <h3>Trade Execution Flow</h3>
+  <div class="flow">
+<span class="node">User submits trade form</span>  <span class="dim">POST /portfolio/trade</span><br>
+<span class="arrow">  ↓</span><br>
+<span class="node">Total amount calculated</span>  <code>qty × price + fees</code><br>
+<span class="cond">  ↙ total ≥ $50k            total < $50k ↘</span><br>
+<span class="node">Create Approval (PENDING)</span>  <span class="node">PortfolioService.execute_buy/sell()</span><br>
+<span class="node">Redirect /approvals/</span>        <span class="node">AccountingService.auto_journal_for_trade()</span><br>
+<span class="dim">  [wait for principal]</span>        <span class="node">Redirect /portfolio/</span><br>
+<span class="node">Principal approves</span><br>
+<span class="node">_execute_approved_trade(payload)</span><br>
+<span class="node">PortfolioService.execute_buy/sell()</span><br>
+<span class="node">AccountingService.auto_journal_for_trade()</span>
+  </div>
+
+  <h3>Price Data Flow</h3>
+  <div class="flow">
+<span class="node">scripts/update_prices.py</span>  (run daily)<br>
+<span class="arrow">  ↓</span><br>
+<span class="node">MarketDataService.bulk_update_prices()</span><br>
+<span class="cond">  ↙ symbol in STABLE_VALUE_SYMBOLS?</span><br>
+<span class="node">Return $1.00 (no fetch)</span>   <span class="node">yf.download() bulk call</span><br>
+<span class="dim">                              ↓</span><br>
+<span class="dim">                     Upsert into asset_prices</span><br>
+<span class="dim">                     Update Asset.current_price</span><br><br>
+<span class="label">At page load:</span><br>
+<span class="node">PortfolioService.get_summary()</span><br>
+<span class="arrow">  → MarketDataService.get_current_price(asset)</span><br>
+<span class="arrow">  → check asset_prices cache (≤3 days old)</span><br>
+<span class="arrow">  → fetch from yfinance if stale</span>
+  </div>
+
+  <h3>Portfolio Summary Assembly</h3>
+  <ol>
+    <li>Query all <code>TaxLot</code> WHERE <code>is_closed = False</code> (fast index scan)</li>
+    <li>Group by (asset_id, account_id) → aggregate remaining_quantity, weighted average CPU</li>
+    <li>For each group: fetch current price → compute market_value, unrealized_gain_loss, weight_pct</li>
+    <li>Query all <code>TaxLotDisposal</code> for current year WHERE <code>disposal_date ≥ Jan 1</code> → sum realized YTD</li>
+    <li>Aggregate market values by asset_class → allocation percentages</li>
+    <li>Return <code>PortfolioSummary</code> Pydantic object</li>
+  </ol>
+
+  <h3>CSV Import Flow (scripts)</h3>
+  <div class="flow">
+<span class="node">Schwab / Fidelity exports CSV</span>  (downloaded from brokerage UI)<br>
+<span class="arrow">  ↓</span><br>
+<span class="node">scripts/update_schwab_645.py</span>  (account-specific script)<br>
+<span class="arrow">  ↓</span><br>
+<span class="label">For each position row:</span><br>
+<span class="node">Close all existing open lots for account</span>  (set is_closed=True)<br>
+<span class="node">Create Transaction (BUY) with cost_basis / quantity</span><br>
+<span class="node">Create TaxLot with original and remaining quantity</span><br>
+<span class="node">Upsert AssetPrice for today</span>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 17 SCRIPTS -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s17">
+  <div class="section-header">
+    <span class="sec-num">17</span>
+    <span class="sec-emoji">🛠️</span>
+    <h2>Scripts &amp; Utilities</h2>
+  </div>
+
+  <h3>update_prices.py — Daily Price Refresh</h3>
+  <p>The primary daily maintenance script. Queries all assets with <code>is_publicly_traded=True</code>, skips <code>STABLE_VALUE_SYMBOLS</code>, calls <code>yf.download()</code> for all remaining symbols in a single bulk call, upserts results into <code>asset_prices</code>, and prints a summary.</p>
+  <pre><code>cd kelly-family-office
+python3 scripts/update_prices.py
+# Output: "Done. Updated 405/406 prices for 2026-05-16."
+# (CTRA shows as "no data" — manually update via Yahoo Finance lookup)</code></pre>
+
+  <h3>Account Import Scripts</h3>
+  <p>Each brokerage account has a dedicated import script that reads a CSV export and rebuilds the position data:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Script</th><th>Account</th><th>Source Format</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">update_schwab_000.py</td><td>Schwab ...000</td><td>Schwab CSV position export</td></tr>
+      <tr><td class="mono">update_schwab_645.py</td><td>Schwab ...645 (Contributory)</td><td>Schwab CSV position export</td></tr>
+      <tr><td class="mono">update_schwab_912.py</td><td>Schwab ...912</td><td>Schwab CSV position export</td></tr>
+      <tr><td class="mono">update_fidelity.py</td><td>Fidelity accounts</td><td>Fidelity CSV + screenshot data</td></tr>
+      <tr><td class="mono">update_529.py</td><td>529 plan</td><td>529 plan export</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Manual Price Update Pattern</h3>
+  <p>When yfinance cannot find a ticker (e.g. delisted CTRA), look up the current price on Yahoo Finance and update directly:</p>
+  <pre><code>python3 - &lt;&lt;'EOF'
+from app.services.db import get_factory
+from app.models.asset import Asset, AssetPrice
+from decimal import Decimal; from datetime import date
+
+factory = get_factory(); db = factory()
+asset = db.query(Asset).filter(Asset.symbol == "CTRA").first()
+asset.current_price = Decimal("32.56")
+db.add(AssetPrice(asset_id=asset.id, price_date=date.today(),
+                  close_price=Decimal("32.56"), source="manual"))
+db.commit(); print("Done")
+EOF</code></pre>
+
+  <h3>Server Management</h3>
+  <pre><code># Kill existing server on port 8001
+lsof -ti :8001 | xargs kill -9
+
+# Start fresh
+cd kelly-family-office
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload \
+  >> /tmp/kfo-server.log 2>&1 &
+
+# Check startup
+tail -10 /tmp/kfo-server.log</code></pre>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 18 SECURITY -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s18">
+  <div class="section-header">
+    <span class="sec-num">18</span>
+    <span class="sec-emoji">🔐</span>
+    <h2>Security &amp; Data Model Notes</h2>
+  </div>
+
+  <h3>Network Security</h3>
+  <ul>
+    <li><strong>Loopback-only:</strong> Server always binds to <code>127.0.0.1</code>. No external network exposure by design.</li>
+    <li><strong>No authentication layer:</strong> Single-user local system. Trust is provided by OS-level access control to the machine.</li>
+    <li><strong>API keys in .env:</strong> Never committed to source control. The <code>.gitignore</code> excludes <code>.env</code> (but not <code>.env.example</code>).</li>
+  </ul>
+
+  <h3>Field-Level Encryption (Partial Implementation)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Model</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">ssn_encrypted</td><td>family_members</td><td class="gold">Column defined, AES key in config, encrypt/decrypt wrappers not yet implemented</td></tr>
+      <tr><td class="mono">tax_id_encrypted</td><td>family_entities, vendors</td><td class="gold">Same — structural scaffold in place</td></tr>
+      <tr><td class="mono">account_number_encrypted</td><td>accounts</td><td class="gold">Same</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Database Security</h3>
+  <ul>
+    <li><strong>WAL mode:</strong> Allows concurrent reads without blocking writes; safer for multi-process access.</li>
+    <li><strong>Foreign key enforcement:</strong> <code>PRAGMA foreign_keys=ON</code> — all FK constraints are checked at insert/update.</li>
+    <li><strong>SQLCipher:</strong> Full-disk encryption is structurally supported via the <code>db_passphrase</code> setting but not active in the default <code>db_url</code> property. The <code>cryptography</code> library is installed and ready.</li>
+  </ul>
+
+  <h3>Known Limitations &amp; Roadmap Items</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Area</th><th>Current State</th><th>Path Forward</th></tr></thead>
+    <tbody>
+      <tr><td>LangGraph resume after approval</td><td class="gold">Column exists; agent-side not wired</td><td>Wire <code>langgraph_thread_id</code> → graph resume via SSE stream</td></tr>
+      <tr><td>Field encryption</td><td class="gold">Columns exist; property wrappers absent</td><td>Add <code>@hybrid_property</code> encrypt/decrypt on affected models</td></tr>
+      <tr><td>Authentication</td><td class="red">None</td><td>Add FastAPI session auth (passphrase or OAuth) for multi-user or remote use</td></tr>
+      <tr><td>Test coverage</td><td class="gold">Service layer only; API, model, agent tests are stubs</td><td>Add <code>TestClient</code> fixtures for API layer; mock LangGraph for agent tests</td></tr>
+      <tr><td>SoftDeleteMixin</td><td class="gold">Defined but inconsistently applied</td><td>Standardize: all models use mixin or explicit <code>is_active</code></td></tr>
+      <tr><td>CTRA price</td><td class="red">Not found by yfinance (possibly delisted)</td><td>Manual update from Yahoo Finance; or mark <code>is_publicly_traded=False</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<hr class="div">
+<p style="font-size:0.75rem; color:#4a5568; text-align:center;">Family Office Wiki · v0.1.0 · Generated 2026-05-21 · <a href="/">← Back to Dashboard</a></p>
+
+</main>
+
+<script>
+// Active TOC highlight on scroll
+const sections = document.querySelectorAll('.section');
+const tocLinks = document.querySelectorAll('#toc a');
+
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      tocLinks.forEach(l => l.classList.remove('active'));
+      const a = document.querySelector(`#toc a[href="#${e.target.id}"]`);
+      if (a) a.classList.add('active');
+    }
+  });
+}, { threshold: 0.2, rootMargin: '-10% 0px -60% 0px' });
+
+sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

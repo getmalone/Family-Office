@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_title | default("Dashboard") }}{% endblock %} - Family Office</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+
+        /* ── Privacy mode ── */
+        /* Applied to <html> immediately from localStorage — no flash */
+        .privacy-mode .bal {
+            font-size: 0 !important;
+            letter-spacing: 0 !important;
+            white-space: nowrap;
+            display: inline-block;
+            min-width: 3.5ch;
+            vertical-align: baseline;
+        }
+        .privacy-mode .bal::after {
+            content: "•••••";
+            font-size: 0.9rem;
+            letter-spacing: 0.06em;
+            color: inherit;
+            font-weight: inherit;
+        }
+        /* Larger bal variants (2xl, 3xl headings) keep proportional dot size */
+        .privacy-mode .bal-lg::after { font-size: 1.3rem; }
+        .privacy-mode .bal-xl::after { font-size: 1.8rem; }
+    </style>
+    <!-- Apply privacy mode before first paint to avoid flash -->
+    <script>
+      if (localStorage.getItem('kfo_privacy') === '1') {
+        document.documentElement.classList.add('privacy-mode');
+      }
+    </script>
+</head>
+<body class="h-full bg-gray-50">
+    <div class="min-h-full">
+        <!-- Navigation -->
+        <nav class="bg-slate-800">
+            <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+                <div class="flex h-16 items-center justify-between">
+                    <div class="flex items-center">
+                        <a href="/" class="text-white font-bold text-lg">Family Office</a>
+                        <div class="ml-10 flex items-baseline space-x-4">
+                            <a href="/" class="{% if page_title == 'Dashboard' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Dashboard</a>
+
+                            <a href="/portfolio/" class="{% if page_title|default('') in ['Portfolio', 'New Trade', 'Accounts', 'Trends', 'Manage Accounts', 'Manage Assets'] or 'Edit' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Portfolio</a>
+                            <a href="/tax/summary" class="{% if 'Tax' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Tax</a>
+                            <a href="/accounting/journal" class="{% if 'Journal' in page_title|default('') or 'Trial' in page_title|default('') or 'Financial' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Accounting</a>
+                            <a href="/reports/" class="{% if page_title == 'Reports' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Reports</a>
+                            <a href="/estate/ownership" class="{% if 'Ownership' in page_title|default('') or 'Gift' in page_title|default('') or 'GRAT' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Estate</a>
+                            <a href="/analysis/morning" class="{% if page_title|default('') in ['Morning Brief', 'Analysis', 'Risk Analysis', 'Investment Profiles', 'Rebalance', 'Monte Carlo'] %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Analysis</a>
+                            <a href="/approvals/" class="{% if 'Approval' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">
+                                Approvals
+                                {% if pending_approvals is defined and pending_approvals > 0 %}
+                                <span class="ml-1 inline-flex items-center rounded-full bg-red-500 px-2 py-0.5 text-xs font-medium text-white">{{ pending_approvals }}</span>
+                                {% endif %}
+                            </a>
+                        </div>
+                    </div>
+                    <!-- Right side: privacy toggle -->
+                    <div class="flex items-center">
+                        <button onclick="togglePrivacy()" id="privacy-btn"
+                                title="Toggle balance visibility"
+                                class="flex items-center gap-1.5 text-gray-300 hover:text-white hover:bg-slate-700
+                                       rounded-md px-3 py-2 text-sm font-medium transition-colors">
+                            <!-- Eye icon (shown when balances visible) -->
+                            <svg id="privacy-eye-open" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                            </svg>
+                            <!-- Eye-off icon (shown when balances hidden) -->
+                            <svg id="privacy-eye-off" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                            </svg>
+                            <span id="privacy-label" class="hidden sm:inline text-xs">Hide</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main content -->
+        <main>
+            <div class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+
+        <!-- Agent Chat Panel -->
+        <div id="chat-panel" class="fixed bottom-4 right-4 z-50">
+            <button onclick="toggleChat()" class="bg-slate-800 text-white rounded-full p-4 shadow-lg hover:bg-slate-700">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+                </svg>
+            </button>
+            <div id="chat-window" class="hidden absolute bottom-16 right-0 w-96 bg-white rounded-lg shadow-xl border">
+                <div class="p-4 bg-slate-800 text-white rounded-t-lg font-medium">AI Assistant</div>
+                <div id="chat-messages" class="h-64 overflow-y-auto p-4 space-y-3">
+                    <div class="text-gray-500 text-sm">Ask me anything about your portfolio, taxes, or estate planning...</div>
+                </div>
+                <form id="chat-form" class="p-4 border-t" onsubmit="sendMessage(event)">
+                    <div class="flex gap-2">
+                        <input type="text" id="chat-input" name="message" placeholder="Type a message..." class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm px-3 py-2 border">
+                        <button type="submit" class="bg-blue-600 text-white rounded-md px-4 py-2 text-sm hover:bg-blue-700">Send</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ── Privacy mode ──────────────────────────────────────────────────────────
+    function _syncPrivacyUI(on) {
+      document.getElementById('privacy-eye-open').classList.toggle('hidden', on);
+      document.getElementById('privacy-eye-off').classList.toggle('hidden', !on);
+      document.getElementById('privacy-label').textContent = on ? 'Show' : 'Hide';
+    }
+
+    function togglePrivacy() {
+      const on = document.documentElement.classList.toggle('privacy-mode');
+      localStorage.setItem('kfo_privacy', on ? '1' : '0');
+      _syncPrivacyUI(on);
+    }
+
+    // Sync button state on page load (class already applied by <head> script)
+    document.addEventListener('DOMContentLoaded', () => {
+      const on = document.documentElement.classList.contains('privacy-mode');
+      _syncPrivacyUI(on);
+    });
+
+    // ── Chat ──────────────────────────────────────────────────────────────────
+    function toggleChat() {
+        document.getElementById('chat-window').classList.toggle('hidden');
+    }
+
+    async function sendMessage(e) {
+        e.preventDefault();
+        const input = document.getElementById('chat-input');
+        const messages = document.getElementById('chat-messages');
+        const msg = input.value.trim();
+        if (!msg) return;
+
+        messages.innerHTML += `<div class="text-sm"><span class="font-medium">You:</span> ${msg}</div>`;
+        input.value = '';
+        messages.innerHTML += `<div class="text-sm text-gray-500" id="typing">Thinking...</div>`;
+        messages.scrollTop = messages.scrollHeight;
+
+        try {
+            const formData = new FormData();
+            formData.append('message', msg);
+            const resp = await fetch('/agent/invoke', { method: 'POST', body: formData });
+            const data = await resp.json();
+            document.getElementById('typing')?.remove();
+            messages.innerHTML += `<div class="text-sm"><span class="font-medium text-blue-600">Assistant:</span> ${data.response}</div>`;
+        } catch (err) {
+            document.getElementById('typing')?.remove();
+            messages.innerHTML += `<div class="text-sm text-red-500">Error: ${err.message}</div>`;
+        }
+        messages.scrollTop = messages.scrollHeight;
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

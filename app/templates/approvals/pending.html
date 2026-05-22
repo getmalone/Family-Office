@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Pending Approvals</h2>
+        <a href="/approvals/history" class="text-blue-600 hover:text-blue-800 text-sm">View History</a>
+    </div>
+
+    {% if pending %}
+    <div class="space-y-4">
+        {% for a in pending %}
+        <div class="bg-white shadow rounded-lg p-6">
+            <div class="flex justify-between items-start">
+                <div>
+                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">{{ a.action_type | upper }}</span>
+                    <h3 class="font-medium text-gray-900 mt-2">{{ a.action_summary }}</h3>
+                    <p class="text-sm text-gray-500 mt-1">Requested by: {{ a.requested_by }} | {{ a.created_at.strftime('%Y-%m-%d %H:%M') if a.created_at else '' }}</p>
+                    {% if a.expires_at %}
+                    <p class="text-xs text-gray-400">Expires: {{ a.expires_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    {% endif %}
+                </div>
+                <div class="flex gap-2">
+                    <form method="POST" action="/approvals/{{ a.id }}/decide" class="inline">
+                        <input type="hidden" name="approved" value="true">
+                        <input type="hidden" name="notes" value="">
+                        <button type="submit" class="bg-green-600 text-white rounded-md px-4 py-2 text-sm hover:bg-green-700">Approve</button>
+                    </form>
+                    <form method="POST" action="/approvals/{{ a.id }}/decide" class="inline">
+                        <input type="hidden" name="approved" value="false">
+                        <input type="hidden" name="notes" value="">
+                        <button type="submit" class="bg-red-600 text-white rounded-md px-4 py-2 text-sm hover:bg-red-700">Reject</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-white shadow rounded-lg p-8 text-center text-gray-500">No pending approvals. All clear!</div>
+    {% endif %}
+</div>
+{% endblock %}

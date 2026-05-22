@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "analysis/_subnav.html" %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Investment Profiles</h2>
+        <a href="/analysis/" class="text-blue-600 hover:text-blue-800 text-sm">Back to Analysis</a>
+    </div>
+
+    <!-- Profile Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for p in profiles %}
+        <div class="bg-white shadow rounded-lg p-5 {% if p.is_active %}ring-2 ring-green-500{% endif %}">
+            <div class="flex justify-between items-start">
+                <div>
+                    <h3 class="font-medium text-gray-900">{{ p.name }}</h3>
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium mt-1
+                        {% if p.risk_tolerance == 'conservative' %}bg-blue-100 text-blue-700
+                        {% elif p.risk_tolerance == 'moderate' %}bg-cyan-100 text-cyan-700
+                        {% elif p.risk_tolerance == 'balanced' %}bg-green-100 text-green-700
+                        {% elif p.risk_tolerance == 'growth' %}bg-amber-100 text-amber-700
+                        {% elif p.risk_tolerance == 'aggressive' %}bg-red-100 text-red-700
+                        {% else %}bg-purple-100 text-purple-700{% endif %}">
+                        {{ p.risk_tolerance | title }}
+                    </span>
+                    {% if p.is_active %}
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 ml-1">Active</span>
+                    {% endif %}
+                </div>
+                <div class="flex gap-1">
+                    {% if not p.is_active %}
+                    <form method="POST" action="/analysis/profiles/{{ p.id }}/activate" class="inline">
+                        <button type="submit" class="text-blue-600 hover:text-blue-800 text-xs">Activate</button>
+                    </form>
+                    {% endif %}
+                    {% if not p.is_system %}
+                    <form method="POST" action="/analysis/profiles/{{ p.id }}/delete" class="inline ml-2">
+                        <button type="submit" class="text-red-500 hover:text-red-700 text-xs">Delete</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if p.description %}
+            <p class="text-sm text-gray-500 mt-2">{{ p.description }}</p>
+            {% endif %}
+
+            <div class="mt-3 space-y-1.5">
+                {% for ac, pct in p.target_allocations.items() %}
+                {% if pct > 0 %}
+                <div class="flex items-center gap-2">
+                    <div class="w-24 text-xs text-gray-500 truncate">{{ ac | replace("_", " ") | title }}</div>
+                    <div class="flex-1 bg-gray-200 rounded-full h-1.5">
+                        <div class="bg-blue-500 h-1.5 rounded-full" style="width: {{ pct }}%"></div>
+                    </div>
+                    <div class="w-10 text-xs text-right text-gray-600">{{ pct }}%</div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Create Custom Profile -->
+    <div class="bg-white shadow rounded-lg p-6">
+        <h3 class="font-medium text-gray-900 mb-4">Create Custom Profile</h3>
+        <form method="POST" action="/analysis/profiles" id="profile-form">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Name</label>
+                    <input type="text" name="name" required class="mt-1 block w-full rounded-md border px-3 py-2 text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Description</label>
+                    <input type="text" name="description" class="mt-1 block w-full rounded-md border px-3 py-2 text-sm">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+                {% for ac in ["us_equity", "intl_equity", "fixed_income", "real_estate", "commodity", "cash", "crypto", "private_equity", "venture_capital", "hedge_fund", "alternative", "other"] %}
+                <div>
+                    <label class="block text-xs font-medium text-gray-600">{{ ac | replace("_", " ") | title }} %</label>
+                    <input type="number" name="{{ ac }}" value="0" min="0" max="100" step="1"
+                           class="mt-1 block w-full rounded-md border px-2 py-1 text-sm alloc-input"
+                           oninput="updateTotal()">
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="flex items-center justify-between">
+                <div class="text-sm">
+                    Total: <span id="alloc-total" class="font-bold">0</span>%
+                    <span id="alloc-warning" class="text-red-500 ml-2 hidden">Must equal 100%</span>
+                </div>
+                <button type="submit" id="create-btn" class="bg-blue-600 text-white rounded-md px-4 py-2 text-sm hover:bg-blue-700 disabled:opacity-50" disabled>Create Profile</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function updateTotal() {
+    const inputs = document.querySelectorAll('.alloc-input');
+    let total = 0;
+    inputs.forEach(input => { total += parseFloat(input.value) || 0; });
+    document.getElementById('alloc-total').textContent = total;
+    const btn = document.getElementById('create-btn');
+    const warn = document.getElementById('alloc-warning');
+    if (Math.abs(total - 100) < 0.5) {
+        btn.disabled = false;
+        warn.classList.add('hidden');
+    } else {
+        btn.disabled = true;
+        warn.classList.remove('hidden');
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Tax Summary - {{ summary.tax_year }}</h2>
+        <div class="space-x-2">
+            <a href="/tax/harvest" class="text-blue-600 hover:text-blue-800 text-sm">Harvesting</a>
+            <a href="/tax/elections" class="text-blue-600 hover:text-blue-800 text-sm">Elections</a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Capital Gains/Losses -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 mb-4">Capital Gains & Losses</h3>
+            <div class="space-y-3 text-sm">
+                <div class="flex justify-between"><span class="text-gray-600">Short-Term Gains</span><span class="text-green-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.short_term_gains) }}</span></span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Short-Term Losses</span><span class="text-red-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.short_term_losses) }}</span></span></div>
+                <hr>
+                <div class="flex justify-between"><span class="text-gray-600">Long-Term Gains</span><span class="text-green-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.long_term_gains) }}</span></span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Long-Term Losses</span><span class="text-red-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.long_term_losses) }}</span></span></div>
+                <hr>
+                <div class="flex justify-between font-medium text-base"><span>Net Gain/Loss</span><span class="{% if summary.net_gain_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}"><span class="bal">${{ "{:,.2f}".format(summary.net_gain_loss) }}</span></span></div>
+            </div>
+        </div>
+
+        <!-- Income & Expenses -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 mb-4">Income & Deductions</h3>
+            <div class="space-y-3 text-sm">
+                <div class="flex justify-between"><span class="text-gray-600">Qualified Dividends</span><span class="font-medium"><span class="bal">${{ "{:,.2f}".format(summary.dividends_qualified) }}</span></span></div>
+                <div class="flex justify-between"><span class="text-gray-600">Interest Income</span><span class="font-medium"><span class="bal">${{ "{:,.2f}".format(summary.interest_income) }}</span></span></div>
+                <hr>
+                <div class="flex justify-between"><span class="text-gray-600">Deductible Expenses</span><span class="text-red-600 font-medium">(<span class="bal">${{ "{:,.2f}".format(summary.deductible_expenses) }}</span>)</span></div>
+                <hr>
+                <div class="flex justify-between font-medium text-base"><span>Estimated Tax Liability</span><span><span class="bal">${{ "{:,.2f}".format(summary.estimated_tax_liability) }}</span></span></div>
+                {% if summary.loss_carryforward > 0 %}
+                <div class="flex justify-between"><span class="text-gray-600">Loss Carryforward</span><span class="text-blue-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.loss_carryforward) }}</span></span></div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

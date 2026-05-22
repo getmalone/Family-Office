@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h2 class="text-2xl font-bold text-gray-900">Trial Balance as of {{ trial_balance.as_of_date }}</h2>
+
+    {% if trial_balance.rows %}
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Account</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Debit</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Credit</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for r in trial_balance.rows %}
+                <tr>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ r.coa_code }}</td>
+                    <td class="px-4 py-3 text-sm font-medium">{{ r.coa_name }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ r.account_type | title }}</td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(r.debit_balance) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(r.credit_balance) }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot class="bg-gray-50">
+                <tr class="font-bold">
+                    <td colspan="3" class="px-4 py-3 text-sm">Totals</td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(trial_balance.total_debits) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(trial_balance.total_credits) }}</span></td>
+                </tr>
+                <tr>
+                    <td colspan="5" class="px-4 py-2 text-sm text-center {% if trial_balance.is_balanced %}text-green-600{% else %}text-red-600{% endif %}">
+                        {% if trial_balance.is_balanced %}Books are balanced{% else %}WARNING: Books are NOT balanced{% endif %}
+                    </td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white shadow rounded-lg p-8 text-center text-gray-500">No accounts with balances.</div>
+    {% endif %}
+</div>
+{% endblock %}

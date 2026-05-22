@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h2 class="text-2xl font-bold text-gray-900">Financial Statements</h2>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Income Statement -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 mb-4">Income Statement ({{ income_statement.period_start }} to {{ income_statement.period_end }})</h3>
+            <div class="space-y-2 text-sm">
+                <div class="font-medium text-gray-700">Revenue</div>
+                {% for name, amount in income_statement.revenue_items %}
+                <div class="flex justify-between ml-4"><span class="text-gray-600">{{ name }}</span><span><span class="bal">${{ "{:,.2f}".format(amount) }}</span></span></div>
+                {% endfor %}
+                <div class="flex justify-between font-medium border-t pt-2"><span>Total Revenue</span><span><span class="bal">${{ "{:,.2f}".format(income_statement.total_revenue) }}</span></span></div>
+
+                <div class="font-medium text-gray-700 mt-4">Expenses</div>
+                {% for name, amount in income_statement.expense_items %}
+                <div class="flex justify-between ml-4"><span class="text-gray-600">{{ name }}</span><span><span class="bal">${{ "{:,.2f}".format(amount) }}</span></span></div>
+                {% endfor %}
+                <div class="flex justify-between font-medium border-t pt-2"><span>Total Expenses</span><span><span class="bal">${{ "{:,.2f}".format(income_statement.total_expenses) }}</span></span></div>
+
+                <div class="flex justify-between font-bold text-base border-t-2 pt-2 mt-2">
+                    <span>Net Income</span>
+                    <span class="{% if income_statement.net_income >= 0 %}text-green-600{% else %}text-red-600{% endif %}"><span class="bal">${{ "{:,.2f}".format(income_statement.net_income) }}</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Balance Sheet -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <h3 class="font-medium text-gray-900 mb-4">Balance Sheet (as of {{ balance_sheet.as_of_date }})</h3>
+            <div class="space-y-2 text-sm">
+                <div class="font-medium text-gray-700">Assets</div>
+                {% for name, amount in balance_sheet.asset_items %}
+                <div class="flex justify-between ml-4"><span class="text-gray-600">{{ name }}</span><span><span class="bal">${{ "{:,.2f}".format(amount) }}</span></span></div>
+                {% endfor %}
+                <div class="flex justify-between font-medium border-t pt-2"><span>Total Assets</span><span><span class="bal">${{ "{:,.2f}".format(balance_sheet.total_assets) }}</span></span></div>
+
+                <div class="font-medium text-gray-700 mt-4">Liabilities</div>
+                {% for name, amount in balance_sheet.liability_items %}
+                <div class="flex justify-between ml-4"><span class="text-gray-600">{{ name }}</span><span><span class="bal">${{ "{:,.2f}".format(amount) }}</span></span></div>
+                {% endfor %}
+                <div class="flex justify-between font-medium border-t pt-2"><span>Total Liabilities</span><span><span class="bal">${{ "{:,.2f}".format(balance_sheet.total_liabilities) }}</span></span></div>
+
+                <div class="font-medium text-gray-700 mt-4">Equity</div>
+                {% for name, amount in balance_sheet.equity_items %}
+                <div class="flex justify-between ml-4"><span class="text-gray-600">{{ name }}</span><span><span class="bal">${{ "{:,.2f}".format(amount) }}</span></span></div>
+                {% endfor %}
+                <div class="flex justify-between font-medium border-t pt-2"><span>Total Equity</span><span><span class="bal">${{ "{:,.2f}".format(balance_sheet.total_equity) }}</span></span></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

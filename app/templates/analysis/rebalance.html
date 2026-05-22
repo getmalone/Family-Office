@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "analysis/_subnav.html" %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Rebalancing Analysis</h2>
+        <a href="/analysis/" class="text-blue-600 hover:text-blue-800 text-sm">Back to Analysis</a>
+    </div>
+
+    {% if error %}
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-700">
+        {{ error }}
+        <a href="/analysis/profiles" class="underline ml-1">Manage profiles</a>
+    </div>
+    {% elif drift %}
+    <!-- Profile Info -->
+    <div class="bg-white shadow rounded-lg p-4 flex items-center justify-between">
+        <div>
+            <span class="font-medium text-gray-900">{{ drift.profile_name }}</span>
+            <span class="text-sm text-gray-500 ml-2">({{ drift.risk_tolerance | title }})</span>
+        </div>
+        <div class="text-sm text-gray-600">
+            Total rebalance: <span class="font-bold"><span class="bal">${{ "{:,.2f}".format(drift.total_rebalance_value) }}</span></span>
+        </div>
+    </div>
+
+    <!-- Drift Table -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <h3 class="font-medium text-gray-900 p-6 pb-3">Allocation Drift</h3>
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset Class</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Target</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Drift</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Visual</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for t in drift.targets %}
+                <tr>
+                    <td class="px-4 py-3 text-sm font-medium">{{ t.asset_class | replace("_", " ") | title }}</td>
+                    <td class="px-4 py-3 text-sm text-right">{{ t.target_pct }}%</td>
+                    <td class="px-4 py-3 text-sm text-right font-medium">{{ t.current_pct }}%</td>
+                    <td class="px-4 py-3 text-sm text-right {% if t.drift_pct > 0 %}text-red-600{% elif t.drift_pct < 0 %}text-blue-600{% endif %}">
+                        {% if t.drift_pct > 0 %}+{% endif %}{{ t.drift_pct }}%
+                    </td>
+                    <td class="px-4 py-3 text-sm text-center">
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                            {% if t.drift_status == 'on_target' %}bg-green-100 text-green-700
+                            {% elif t.drift_status == 'overweight' %}bg-red-100 text-red-700
+                            {% else %}bg-blue-100 text-blue-700{% endif %}">
+                            {{ t.drift_status | replace("_", " ") | title }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3">
+                        <div class="w-32 flex items-center">
+                            {% set bar_width = [t.drift_pct | float | abs, 30] | min %}
+                            {% if t.drift_pct > 0 %}
+                            <div class="h-2 bg-red-400 rounded" style="width: {{ bar_width * 3 }}px"></div>
+                            {% elif t.drift_pct < 0 %}
+                            <div class="h-2 bg-blue-400 rounded" style="width: {{ bar_width * 3 }}px"></div>
+                            {% else %}
+                            <div class="h-2 bg-green-400 rounded" style="width: 4px"></div>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Rebalancing Recommendations -->
+    {% if drift.rebalance_actions %}
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <h3 class="font-medium text-gray-900 p-6 pb-3">Rebalancing Recommendations</h3>
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset Class</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Change</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Amount</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Suggested</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for a in drift.rebalance_actions %}
+                <tr>
+                    <td class="px-4 py-3 text-sm font-medium">{{ a.asset_class | replace("_", " ") | title }}</td>
+                    <td class="px-4 py-3 text-sm text-center">
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                            {% if a.action == 'buy' %}bg-green-100 text-green-700{% else %}bg-red-100 text-red-700{% endif %}">
+                            {{ a.action | upper }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-right">{{ a.target_change_pct }}%</td>
+                    <td class="px-4 py-3 text-sm text-right font-medium"><span class="bal">${{ "{:,.2f}".format(a.estimated_dollar_amount) }}</span></td>
+                    <td class="px-4 py-3 text-sm">{{ a.suggested_symbol or "-" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

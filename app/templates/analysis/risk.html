@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "analysis/_subnav.html" %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Risk Analysis</h2>
+        <div class="flex items-center gap-4">
+            <form method="GET" class="flex items-center gap-2">
+                <label class="text-sm text-gray-600">Lookback:</label>
+                <select name="lookback" onchange="this.form.submit()" class="rounded-md border px-2 py-1 text-sm">
+                    <option value="63" {% if lookback == 63 %}selected{% endif %}>3 Months</option>
+                    <option value="126" {% if lookback == 126 %}selected{% endif %}>6 Months</option>
+                    <option value="252" {% if lookback == 252 %}selected{% endif %}>1 Year</option>
+                    <option value="504" {% if lookback == 504 %}selected{% endif %}>2 Years</option>
+                </select>
+            </form>
+            <a href="/analysis/" class="text-blue-600 hover:text-blue-800 text-sm">Overview</a>
+        </div>
+    </div>
+
+    <!-- Core Metrics Cards (row 1) -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="bg-white shadow rounded-lg p-5">
+            <div class="text-sm text-gray-500">Volatility (Ann.)</div>
+            <div class="text-3xl font-semibold">{{ risk.portfolio_volatility }}%</div>
+        </div>
+        <div class="bg-white shadow rounded-lg p-5">
+            <div class="text-sm text-gray-500">Sharpe Ratio</div>
+            <div class="text-3xl font-semibold {% if risk.sharpe_ratio >= 1 %}text-green-600{% elif risk.sharpe_ratio < 0 %}text-red-600{% endif %}">{{ risk.sharpe_ratio }}</div>
+            <div class="text-xs text-gray-400">Risk-free rate {{ risk.risk_free_rate | float * 100 | round(1) }}%</div>
+        </div>
+        <div class="bg-white shadow rounded-lg p-5">
+            <div class="text-sm text-gray-500">Max Drawdown</div>
+            <div class="text-3xl font-semibold text-red-600">{{ risk.max_drawdown }}%</div>
+            <div class="text-xs text-gray-400">{{ risk.max_drawdown_period }}</div>
+        </div>
+        <div class="bg-white shadow rounded-lg p-5">
+            <div class="text-sm text-gray-500">Beta vs S&amp;P 500</div>
+            <div class="text-3xl font-semibold">{{ risk.beta }}</div>
+        </div>
+    </div>
+
+    <!-- VaR / CVaR Cards (row 2) -->
+    {% if risk.var_95 is not none %}
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="bg-white shadow rounded-lg p-5 border-l-4 border-yellow-400">
+            <div class="text-sm text-gray-500">1-Day VaR (95%)</div>
+            <div class="text-2xl font-semibold text-yellow-700"><span class="bal">${{ "{:,.0f}".format(risk.var_95) }}</span></div>
+            <div class="text-xs text-gray-400">Loss not exceeded 95% of days</div>
+        </div>
+        <div class="bg-white shadow rounded-lg p-5 border-l-4 border-orange-500">
+            <div class="text-sm text-gray-500">CVaR / ES (95%)</div>
+            <div class="text-2xl font-semibold text-orange-700"><span class="bal">${{ "{:,.0f}".format(risk.cvar_95) }}</span></div>
+            <div class="text-xs text-gray-400">Expected loss beyond VaR (Tail Risk)</div>
+        </div>
+        <div class="bg-white shadow rounded-lg p-5 border-l-4 border-red-400">
+            <div class="text-sm text-gray-500">1-Day VaR (99%)</div>
+            <div class="text-2xl font-semibold text-red-700"><span class="bal">${{ "{:,.0f}".format(risk.var_99) }}</span></div>
+            <div class="text-xs text-gray-400">Loss not exceeded 99% of days</div>
+        </div>
+        <div class="bg-white shadow rounded-lg p-5 border-l-4 border-red-700">
+            <div class="text-sm text-gray-500">CVaR / ES (99%)</div>
+            <div class="text-2xl font-semibold text-red-800"><span class="bal">${{ "{:,.0f}".format(risk.cvar_99) }}</span></div>
+            <div class="text-xs text-gray-400">Expected loss in worst 1% of days</div>
+        </div>
+    </div>
+    <p class="text-xs text-gray-400 -mt-4">VaR/CVaR computed via historical simulation over {{ risk.lookback_days }}-day lookback. Positive = dollar loss.</p>
+    {% endif %}
+
+    <!-- Tabs: Position / Asset Class / Correlation / Returns -->
+    <div>
+        <div class="border-b border-gray-200 mb-4">
+            <nav class="-mb-px flex gap-6">
+                <button onclick="switchTab('position')" id="tab-btn-position" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-blue-600 text-blue-600">Position Risk</button>
+                <button onclick="switchTab('assetclass')" id="tab-btn-assetclass" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Asset Class</button>
+                <button onclick="switchTab('correlation')" id="tab-btn-correlation" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Correlation Heatmap</button>
+                <button onclick="switchTab('returns')" id="tab-btn-returns" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Return Metrics (TWR)</button>
+            </nav>
+        </div>
+
+        <!-- Position Risk Table -->
+        <div id="tab-position">
+            {% if risk.position_risks %}
+            <div class="bg-white shadow rounded-lg overflow-hidden">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ann. Volatility</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Beta</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Risk Contrib. %</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for p in risk.position_risks %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-3 text-sm">
+                                <span class="font-medium">{{ p.symbol or p.name }}</span>
+                                <span class="text-gray-400 text-xs ml-1">{{ p.asset_class | replace("_", " ") | title }}</span>
+                            </td>
+                            <td class="px-4 py-3 text-sm text-right">{{ p.weight_pct }}%</td>
+                            <td class="px-4 py-3 text-sm text-right">{% if p.annualized_volatility is not none %}{{ p.annualized_volatility }}%{% else %}-{% endif %}</td>
+                            <td class="px-4 py-3 text-sm text-right">{% if p.beta is not none %}{{ p.beta }}{% else %}-{% endif %}</td>
+                            <td class="px-4 py-3 text-sm text-right">
+                                {% if p.risk_contribution_pct is not none %}
+                                <div class="flex items-center justify-end gap-2">
+                                    <div class="w-20 bg-gray-100 rounded-full h-1.5">
+                                        <div class="bg-blue-500 h-1.5 rounded-full" style="width: {{ [p.risk_contribution_pct | float, 100] | min }}%"></div>
+                                    </div>
+                                    {{ p.risk_contribution_pct }}%
+                                </div>
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-gray-400 text-sm">No position data available.</p>
+            {% endif %}
+        </div>
+
+        <!-- Asset Class Risk -->
+        <div id="tab-assetclass" style="display:none">
+            {% if risk.asset_class_risks %}
+            <div class="bg-white shadow rounded-lg overflow-hidden">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset Class</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ann. Volatility</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Risk Contribution</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for ac in risk.asset_class_risks %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm font-medium">{{ ac.asset_class | replace("_", " ") | title }}</td>
+                            <td class="px-4 py-3 text-sm text-right">{{ ac.weight_pct }}%</td>
+                            <td class="px-4 py-3 text-sm text-right">{% if ac.annualized_volatility is not none %}{{ ac.annualized_volatility }}%{% else %}-{% endif %}</td>
+                            <td class="px-4 py-3 text-sm text-right">
+                                {% if ac.contribution_to_risk is not none %}
+                                <div class="flex items-center justify-end gap-2">
+                                    <div class="w-20 bg-gray-100 rounded-full h-1.5">
+                                        <div class="bg-blue-500 h-1.5 rounded-full" style="width: {{ [ac.contribution_to_risk | float, 100] | min }}%"></div>
+                                    </div>
+                                    {{ ac.contribution_to_risk }}%
+                                </div>
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Correlation Heatmap (lazy-loaded) -->
+        <div id="tab-correlation" style="display:none">
+            <div class="bg-white shadow rounded-lg p-6">
+                <div id="corr-loading" class="text-gray-400 text-sm">Loading correlation matrix…</div>
+                <div id="corr-container" class="hidden overflow-x-auto">
+                    <canvas id="corr-chart" style="max-width: 900px;"></canvas>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">Pearson correlation of daily returns — {{ lookback }}-day lookback. Blue = positive, Red = negative.</p>
+            </div>
+        </div>
+
+        <!-- Time-Weighted Returns (lazy-loaded) -->
+        <div id="tab-returns" style="display:none">
+            <div id="returns-loading" class="text-gray-400 text-sm bg-white shadow rounded-lg p-6">Loading return metrics…</div>
+            <div id="returns-container" class="hidden">
+                <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                    <div class="bg-white shadow rounded-lg p-5">
+                        <div class="text-sm text-gray-500">1-Year TWR</div>
+                        <div id="twr-1yr" class="text-3xl font-semibold">—</div>
+                    </div>
+                    <div class="bg-white shadow rounded-lg p-5">
+                        <div class="text-sm text-gray-500">3-Year TWR (Ann.)</div>
+                        <div id="twr-3yr" class="text-3xl font-semibold">—</div>
+                    </div>
+                    <div class="bg-white shadow rounded-lg p-5">
+                        <div class="text-sm text-gray-500">5-Year TWR (Ann.)</div>
+                        <div id="twr-5yr" class="text-3xl font-semibold">—</div>
+                    </div>
+                    <div class="bg-white shadow rounded-lg p-5">
+                        <div class="text-sm text-gray-500">Since Inception (Ann.)</div>
+                        <div id="twr-inception" class="text-3xl font-semibold">—</div>
+                        <div id="twr-since" class="text-xs text-gray-400"></div>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">TWR = Time-Weighted Return (chain-linked sub-period returns, annualised). Computed from available daily price history.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const TABS = ['position', 'assetclass', 'correlation', 'returns'];
+
+function switchTab(name) {
+    TABS.forEach(t => {
+        const panel = document.getElementById('tab-' + t);
+        const btn   = document.getElementById('tab-btn-' + t);
+        const active = t === name;
+        panel.style.display = active ? '' : 'none';
+        btn.classList.toggle('border-blue-600', active);
+        btn.classList.toggle('text-blue-600',   active);
+        btn.classList.toggle('border-transparent', !active);
+        btn.classList.toggle('text-gray-500',   !active);
+    });
+    if (name === 'correlation') loadCorrelation();
+    if (name === 'returns')     loadReturns();
+}
+
+let corrLoaded = false;
+let returnsLoaded = false;
+
+function loadCorrelation() {
+    if (corrLoaded) return;
+    corrLoaded = true;
+    fetch('/analysis/api/correlation?lookback_days={{ lookback }}')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('corr-loading').classList.add('hidden');
+            if (!data.symbols || data.symbols.length < 2) {
+                document.getElementById('corr-loading').textContent = 'Not enough price history for correlation matrix.';
+                document.getElementById('corr-loading').classList.remove('hidden');
+                return;
+            }
+            document.getElementById('corr-container').classList.remove('hidden');
+            renderHeatmap(data);
+        })
+        .catch(() => {
+            document.getElementById('corr-loading').textContent = 'Failed to load correlation data.';
+        });
+}
+
+function renderHeatmap(data) {
+    const n = data.symbols.length;
+    const canvas = document.getElementById('corr-chart');
+    const cellSize = Math.max(28, Math.min(56, Math.floor(700 / n)));
+    const labelPad = 70;
+    canvas.width = labelPad + n * cellSize;
+    canvas.height = labelPad + n * cellSize;
+    const ctx = canvas.getContext('2d');
+    ctx.font = `${Math.max(9, cellSize / 3.5)}px sans-serif`;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+
+    function corrColor(v) {
+        // -1 → red, 0 → white, +1 → blue
+        const r = v < 0 ? 220 : Math.round(220 * (1 - v));
+        const g = Math.round(220 * (1 - Math.abs(v)));
+        const b = v > 0 ? 220 : Math.round(220 * (1 + v));
+        return `rgb(${r},${g},${b})`;
+    }
+
+    // Row labels
+    data.symbols.forEach((sym, i) => {
+        ctx.fillStyle = '#374151';
+        ctx.fillText(sym, labelPad - 4, labelPad + i * cellSize + cellSize / 2);
+    });
+
+    // Column labels (rotated)
+    ctx.save();
+    ctx.translate(0, 0);
+    data.symbols.forEach((sym, j) => {
+        ctx.save();
+        ctx.translate(labelPad + j * cellSize + cellSize / 2, labelPad - 4);
+        ctx.rotate(-Math.PI / 3);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#374151';
+        ctx.fillText(sym, 0, 0);
+        ctx.restore();
+    });
+    ctx.restore();
+
+    // Cells
+    data.matrix.forEach((row, i) => {
+        row.forEach((val, j) => {
+            const v = parseFloat(val);
+            ctx.fillStyle = corrColor(v);
+            ctx.fillRect(labelPad + j * cellSize, labelPad + i * cellSize, cellSize, cellSize);
+            // Value text (only if large enough)
+            if (cellSize >= 38) {
+                ctx.fillStyle = Math.abs(v) > 0.5 ? '#fff' : '#374151';
+                ctx.textAlign = 'center';
+                ctx.fillText(v.toFixed(2), labelPad + j * cellSize + cellSize / 2, labelPad + i * cellSize + cellSize / 2);
+                ctx.textAlign = 'right';
+            }
+            // Grid
+            ctx.strokeStyle = '#e5e7eb';
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(labelPad + j * cellSize, labelPad + i * cellSize, cellSize, cellSize);
+        });
+    });
+}
+
+function loadReturns() {
+    if (returnsLoaded) return;
+    returnsLoaded = true;
+    fetch('/analysis/api/returns')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('returns-loading').classList.add('hidden');
+            document.getElementById('returns-container').classList.remove('hidden');
+
+            function fmt(val) {
+                if (val === null || val === undefined) return '—';
+                const n = parseFloat(val);
+                const cls = n >= 0 ? 'text-green-600' : 'text-red-600';
+                return `<span class="${cls}">${n >= 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
+            }
+
+            document.getElementById('twr-1yr').innerHTML = fmt(data.twr_1yr);
+            document.getElementById('twr-3yr').innerHTML = fmt(data.twr_3yr);
+            document.getElementById('twr-5yr').innerHTML = fmt(data.twr_5yr);
+            document.getElementById('twr-inception').innerHTML = fmt(data.twr_inception);
+            if (data.annualized_since) {
+                document.getElementById('twr-since').textContent = `Since ${data.annualized_since}`;
+            }
+        })
+        .catch(() => {
+            document.getElementById('returns-loading').textContent = 'Failed to load return data.';
+        });
+}
+</script>
+{% endblock %}

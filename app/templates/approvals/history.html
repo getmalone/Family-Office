@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-900">Approval History</h2>
+        <a href="/approvals/" class="text-blue-600 hover:text-blue-800 text-sm">Pending</a>
+    </div>
+
+    {% if history %}
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Summary</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Decided</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for a in history %}
+                <tr>
+                    <td class="px-4 py-3 text-sm">{{ a.action_type }}</td>
+                    <td class="px-4 py-3 text-sm">{{ a.action_summary }}</td>
+                    <td class="px-4 py-3 text-sm">
+                        <span class="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium
+                            {% if a.status.value == 'approved' %}bg-green-100 text-green-700
+                            {% elif a.status.value == 'rejected' %}bg-red-100 text-red-700
+                            {% else %}bg-gray-100 text-gray-700{% endif %}">
+                            {{ a.status.value | title }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ a.decision_at.strftime('%Y-%m-%d %H:%M') if a.decision_at else '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ a.decision_notes or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white shadow rounded-lg p-8 text-center text-gray-500">No approval history.</div>
+    {% endif %}
+</div>
+{% endblock %}
