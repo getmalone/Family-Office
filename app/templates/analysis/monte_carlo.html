@@ -201,8 +201,8 @@
         {# Spending Smile phase breakdown #}
         {% if r.spending_pattern == 'smile' and r.smile_go_go_years > 0 %}
         {% set no_go_years = r.withdrawal_years - r.smile_go_go_years - r.smile_slow_go_years %}
-        {% set slow_go_income = r.withdrawal_annual_amount * r.smile_slow_pct / 100 %}
-        {% set no_go_income   = r.withdrawal_annual_amount * r.smile_no_pct  / 100 %}
+        {% set slow_go_income = r.withdrawal_annual_amount | float * r.smile_slow_pct / 100 %}
+        {% set no_go_income   = r.withdrawal_annual_amount | float * r.smile_no_pct  / 100 %}
         <div class="flex gap-0 mb-3 rounded-lg overflow-hidden border border-orange-100 text-xs text-center font-medium">
           <div class="flex-1 bg-green-50 py-2 px-1 border-r border-orange-100">
             <div class="text-green-700">🏃 Go-Go</div>
