@@ -809,39 +809,41 @@ class AnalysisService:
                 log_returns[:, y] = rng.normal(adj_drift, adj_sigma, num_simulations)
 
         # ── Compound log-returns → portfolio values ───────────────────────────
-        growth_factors = np.exp(log_returns)   # shape: (num_simulations, years)
-
-        annual_contrib = monthly_contribution * 12.0
-
-        if annual_contrib > 0:
-            # Iterative path: each year applies growth then adds mid-year contributions.
-            # Mid-year approximation: contributions are assumed to arrive uniformly
-            # throughout the year, so on average they earn √gf (6-month growth).
-            #   V(t+1) = V(t) × gf  +  C_annual × √gf
-            port = np.full(num_simulations, initial_value, dtype=float)
-            yearly_values = np.empty((num_simulations, years), dtype=float)
-            for y in range(years):
-                gf = growth_factors[:, y]
-                port = port * gf + annual_contrib * np.sqrt(gf)
-                yearly_values[:, y] = port
-            cumulative = yearly_values
+        # years=0 means immediate retirement: skip accumulation entirely.
+        trajectories: list[SimulationOutcome] = []
+        if years == 0:
+            final_vals = np.full(num_simulations, initial_value, dtype=float)
         else:
-            cumulative = np.cumprod(growth_factors, axis=1) * initial_value
+            growth_factors = np.exp(log_returns)   # shape: (num_simulations, years)
+            annual_contrib = monthly_contribution * 12.0
 
-        # Percentiles at each year
-        trajectories = []
-        for y in range(years):
-            vals = cumulative[:, y]
-            trajectories.append(SimulationOutcome(
-                year=y + 1,
-                p10=Decimal(str(round(float(np.percentile(vals, 10)), 2))),
-                p25=Decimal(str(round(float(np.percentile(vals, 25)), 2))),
-                median=Decimal(str(round(float(np.median(vals)), 2))),
-                p75=Decimal(str(round(float(np.percentile(vals, 75)), 2))),
-                p90=Decimal(str(round(float(np.percentile(vals, 90)), 2))),
-            ))
+            if annual_contrib > 0:
+                # Iterative path: each year applies growth then adds mid-year contributions.
+                # Mid-year approximation: contributions are assumed to arrive uniformly
+                # throughout the year, so on average they earn √gf (6-month growth).
+                #   V(t+1) = V(t) × gf  +  C_annual × √gf
+                port = np.full(num_simulations, initial_value, dtype=float)
+                yearly_values = np.empty((num_simulations, years), dtype=float)
+                for y in range(years):
+                    gf = growth_factors[:, y]
+                    port = port * gf + annual_contrib * np.sqrt(gf)
+                    yearly_values[:, y] = port
+                cumulative = yearly_values
+            else:
+                cumulative = np.cumprod(growth_factors, axis=1) * initial_value
 
-        final_vals = cumulative[:, -1]
+            for y in range(years):
+                vals = cumulative[:, y]
+                trajectories.append(SimulationOutcome(
+                    year=y + 1,
+                    p10=Decimal(str(round(float(np.percentile(vals, 10)), 2))),
+                    p25=Decimal(str(round(float(np.percentile(vals, 25)), 2))),
+                    median=Decimal(str(round(float(np.median(vals)), 2))),
+                    p75=Decimal(str(round(float(np.percentile(vals, 75)), 2))),
+                    p90=Decimal(str(round(float(np.percentile(vals, 90)), 2))),
+                ))
+
+            final_vals = cumulative[:, -1]
         prob_goal = None
         if goal_amount:
             prob_goal = float(np.mean(final_vals >= goal_amount) * 100)

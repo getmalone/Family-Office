@@ -24,7 +24,7 @@
             <div>
               <label class="block text-sm font-medium text-gray-700">Accumulation Years</label>
               <select name="years" class="mt-1 rounded-md border px-3 py-2 text-sm">
-                {% for y in [3, 5, 7, 10, 15, 20] %}
+                {% for y in [0, 3, 5, 7, 10, 15, 20] %}
                 <option value="{{ y }}" {% if years == y %}selected{% endif %}>{{ y }} years</option>
                 {% endfor %}
               </select>
