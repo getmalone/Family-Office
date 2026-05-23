@@ -209,7 +209,7 @@ def rebalance_page(request: Request, db: Session = Depends(get_db)):
 @router.get("/monte-carlo")
 def monte_carlo_page(
     request: Request,
-    years: int = Query(10, ge=1, le=50),
+    years: int = Query(10, ge=0, le=50),
     simulations: int = Query(1000, ge=100, le=10000),
     goal: str | None = Query(None),
     monthly_contribution: str | None = Query(None),
@@ -302,7 +302,7 @@ def api_returns(db: Session = Depends(get_db)):
 
 @router.get("/api/monte-carlo")
 def api_monte_carlo(
-    years: int = Query(10, ge=1, le=50),
+    years: int = Query(10, ge=0, le=50),
     simulations: int = Query(1000, ge=100, le=10000),
     goal: str | None = Query(None),
     monthly_contribution: str | None = Query(None),
