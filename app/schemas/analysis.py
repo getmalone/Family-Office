@@ -112,6 +112,8 @@ class InvestmentProfileSchema(BaseModel):
     risk_tolerance: str
     is_system: bool
     is_active: bool
+    is_comparison_a: bool = False
+    is_comparison_b: bool = False
     description: str | None
     target_allocations: dict[str, Decimal]
 
@@ -197,6 +199,6 @@ class MonteCarloResult(BaseModel):
 class MonteCarloComparison(BaseModel):
     current: MonteCarloResult
     target: MonteCarloResult | None = None
-    conservative: MonteCarloResult | None = None
-    aggressive: MonteCarloResult | None = None
+    comparison_a: MonteCarloResult | None = None
+    comparison_b: MonteCarloResult | None = None
     goal_amount: Decimal | None = None

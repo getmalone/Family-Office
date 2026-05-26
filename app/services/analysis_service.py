@@ -494,9 +494,42 @@ class AnalysisService:
             risk_tolerance=rt_str,
             is_system=p.is_system,
             is_active=p.is_active,
+            is_comparison_a=bool(getattr(p, "is_comparison_a", False)),
+            is_comparison_b=bool(getattr(p, "is_comparison_b", False)),
             description=p.description,
             target_allocations={k: Decimal(v) for k, v in allocs.items()},
         )
+
+    def get_comparison_profiles(
+        self,
+    ) -> tuple["InvestmentProfileSchema | None", "InvestmentProfileSchema | None"]:
+        """Return the profiles selected as Comparison A and B (either may be None)."""
+        a = self.session.query(InvestmentProfile).filter(
+            InvestmentProfile.is_comparison_a == True
+        ).first()
+        b = self.session.query(InvestmentProfile).filter(
+            InvestmentProfile.is_comparison_b == True
+        ).first()
+        return (
+            self._profile_to_schema(a) if a else None,
+            self._profile_to_schema(b) if b else None,
+        )
+
+    def set_comparison_profile(self, profile_id: int, slot: str) -> None:
+        """Set a profile as Comparison A or B (slot = 'a' or 'b').
+        Clears any previous selection for that slot first.
+        """
+        if slot == "a":
+            self.session.query(InvestmentProfile).update({"is_comparison_a": False})
+            p = self.session.get(InvestmentProfile, profile_id)
+            if p:
+                p.is_comparison_a = True
+        else:
+            self.session.query(InvestmentProfile).update({"is_comparison_b": False})
+            p = self.session.get(InvestmentProfile, profile_id)
+            if p:
+                p.is_comparison_b = True
+        self.session.flush()
 
     # ── Drift & Rebalancing ─────────────────────────────────────────────
 
@@ -706,14 +739,13 @@ class AnalysisService:
                     smile_no_pct=smile_no_pct,
                 )
 
-        # ── Conservative / Aggressive comparison simulations ─────────────────
-        def _profile_sim(tolerance: str, label: str) -> "MonteCarloResult | None":
-            p = next((x for x in DEFAULT_PROFILES if x["risk_tolerance"] == tolerance), None)
-            if not p:
+        # ── Comparison A / B simulations (user-selected profiles) ────────────
+        def _sim_from_profile(profile: "InvestmentProfileSchema | None") -> "MonteCarloResult | None":
+            if not profile:
                 return None
-            alloc = {k: float(v) / 100 for k, v in p["allocations"].items() if v > 0}
+            alloc = {k: float(v) / 100 for k, v in profile.target_allocations.items() if float(v) > 0}
             return self._simulate(
-                label=label,
+                label=profile.name,
                 allocation=alloc,
                 initial_value=initial_value,
                 years=years,
@@ -728,14 +760,15 @@ class AnalysisService:
                 smile_no_pct=smile_no_pct,
             )
 
-        conservative_result = _profile_sim("conservative", "Conservative")
-        aggressive_result   = _profile_sim("aggressive",   "Aggressive")
+        profile_a, profile_b = self.get_comparison_profiles()
+        comparison_a_result  = _sim_from_profile(profile_a)
+        comparison_b_result  = _sim_from_profile(profile_b)
 
         return MonteCarloComparison(
             current=current_result,
             target=target_result,
-            conservative=conservative_result,
-            aggressive=aggressive_result,
+            comparison_a=comparison_a_result,
+            comparison_b=comparison_b_result,
             goal_amount=goal_amount,
         )
 

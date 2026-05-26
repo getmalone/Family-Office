@@ -39,5 +39,7 @@ class InvestmentProfile(Base, TimestampMixin):
     risk_tolerance: Mapped[RiskToleranceEnum] = mapped_column(String(50))
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_comparison_a: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_comparison_b: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     target_allocations_json: Mapped[str] = mapped_column(String(2000))

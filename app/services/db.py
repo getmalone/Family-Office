@@ -39,8 +39,31 @@ def create_db_engine(cfg: Settings | None = None) -> Engine:
 
 
 def create_tables(engine: Engine) -> None:
-    """Create all tables from the ORM models."""
+    """Create all tables from the ORM models, then apply incremental migrations."""
     Base.metadata.create_all(engine)
+    _apply_migrations(engine)
+
+
+def _apply_migrations(engine: Engine) -> None:
+    """Idempotent column migrations for SQLite.
+
+    ALTER TABLE ADD COLUMN raises OperationalError if the column already exists,
+    so each statement is wrapped in its own try/except.  Safe to run on every
+    startup — existing columns are silently skipped.
+    """
+    from sqlalchemy import text
+
+    migrations = [
+        "ALTER TABLE investment_profiles ADD COLUMN is_comparison_a BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE investment_profiles ADD COLUMN is_comparison_b BOOLEAN NOT NULL DEFAULT 0",
+    ]
+    with engine.connect() as conn:
+        for stmt in migrations:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                pass  # column already exists — safe to ignore
 
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:

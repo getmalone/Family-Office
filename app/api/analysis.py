@@ -183,6 +183,22 @@ def delete_profile(profile_id: int, db: Session = Depends(get_db)):
     return RedirectResponse(url="/analysis/profiles", status_code=303)
 
 
+@router.post("/profiles/{profile_id}/set-comparison-a")
+def set_comparison_a(profile_id: int, db: Session = Depends(get_db)):
+    """Select a profile as Monte Carlo Comparison A (left column)."""
+    svc = AnalysisService(db)
+    svc.set_comparison_profile(profile_id, "a")
+    return RedirectResponse(url="/analysis/profiles", status_code=303)
+
+
+@router.post("/profiles/{profile_id}/set-comparison-b")
+def set_comparison_b(profile_id: int, db: Session = Depends(get_db)):
+    """Select a profile as Monte Carlo Comparison B (right column)."""
+    svc = AnalysisService(db)
+    svc.set_comparison_profile(profile_id, "b")
+    return RedirectResponse(url="/analysis/profiles", status_code=303)
+
+
 @router.get("/rebalance")
 def rebalance_page(request: Request, db: Session = Depends(get_db)):
     """Show drift analysis and rebalancing recommendations."""
