@@ -197,4 +197,6 @@ class MonteCarloResult(BaseModel):
 class MonteCarloComparison(BaseModel):
     current: MonteCarloResult
     target: MonteCarloResult | None = None
+    conservative: MonteCarloResult | None = None
+    aggressive: MonteCarloResult | None = None
     goal_amount: Decimal | None = None

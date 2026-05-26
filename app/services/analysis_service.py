@@ -706,9 +706,36 @@ class AnalysisService:
                     smile_no_pct=smile_no_pct,
                 )
 
+        # ── Conservative / Aggressive comparison simulations ─────────────────
+        def _profile_sim(tolerance: str, label: str) -> "MonteCarloResult | None":
+            p = next((x for x in DEFAULT_PROFILES if x["risk_tolerance"] == tolerance), None)
+            if not p:
+                return None
+            alloc = {k: float(v) / 100 for k, v in p["allocations"].items() if v > 0}
+            return self._simulate(
+                label=label,
+                allocation=alloc,
+                initial_value=initial_value,
+                years=years,
+                num_simulations=num_simulations,
+                goal_amount=float(goal_amount) if goal_amount else None,
+                regime=portfolio_regime,
+                monthly_contribution=monthly_contrib_float,
+                withdrawal_rate=withdrawal_rate_float,
+                withdrawal_years=withdrawal_years_int,
+                spending_pattern=spending_pattern,
+                smile_slow_pct=smile_slow_pct,
+                smile_no_pct=smile_no_pct,
+            )
+
+        conservative_result = _profile_sim("conservative", "Conservative")
+        aggressive_result   = _profile_sim("aggressive",   "Aggressive")
+
         return MonteCarloComparison(
             current=current_result,
             target=target_result,
+            conservative=conservative_result,
+            aggressive=aggressive_result,
             goal_amount=goal_amount,
         )
 

@@ -126,12 +126,25 @@
       </div>
     </div>
 
-    {# ── helper macro: one result card ── #}
-    {% macro result_card(r) %}
-    <div class="bg-white shadow rounded-lg p-6">
+    {# ── helper macro: one result card (accent: blue | green | red) ── #}
+    {% macro result_card(r, accent='blue') %}
+    {% if accent == 'green' %}
+      {% set top_border = 'border-t-4 border-green-500' %}
+      {% set badge_cls  = 'bg-green-100 text-green-700' %}
+      {% set icon       = '🛡️' %}
+    {% elif accent == 'red' %}
+      {% set top_border = 'border-t-4 border-red-500' %}
+      {% set badge_cls  = 'bg-red-100 text-red-700' %}
+      {% set icon       = '🚀' %}
+    {% else %}
+      {% set top_border = 'border-t-4 border-blue-500' %}
+      {% set badge_cls  = 'bg-blue-100 text-blue-700' %}
+      {% set icon       = '📊' %}
+    {% endif %}
+    <div class="bg-white shadow rounded-lg p-6 {{ top_border }}">
       {# Header #}
       <div class="flex items-center gap-2 mb-1">
-        <h3 class="font-medium text-gray-900">{{ r.label }}</h3>
+        <span class="text-xs font-semibold px-2 py-0.5 rounded-full {{ badge_cls }}">{{ icon }} {{ r.label }}</span>
         {% if r.regime_context and r.regime_context != 'Base' %}
         <span class="text-xs font-semibold px-2 py-0.5 rounded-full
           {{ 'bg-emerald-100 text-emerald-700' if r.regime_context == 'Bull' else
@@ -277,22 +290,7 @@
     </div>
     {% endmacro %}
 
-    <!-- Accumulation + Distribution result cards -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {{ result_card(result.current) }}
-      {% if result.target %}
-        {{ result_card(result.target) }}
-      {% else %}
-      <div class="bg-white shadow rounded-lg p-6 flex items-center justify-center text-gray-500">
-        <div class="text-center">
-          <p>No target allocation to compare.</p>
-          <a href="/analysis/profiles" class="text-blue-600 hover:text-blue-800 text-sm">Activate a profile</a>
-        </div>
-      </div>
-      {% endif %}
-    </div>
-
-    <!-- Combined Fan Chart -->
+    <!-- Combined Fan Chart — shown first for easy comparison -->
     <div class="bg-white shadow rounded-lg p-6">
       <div class="flex items-center justify-between mb-4">
         <h3 class="font-medium text-gray-900">
@@ -303,16 +301,29 @@
           ({{ years }}-Year)
           {% endif %}
         </h3>
-        {% if result.current.withdrawal_years > 0 %}
         <div class="flex items-center gap-4 text-xs text-gray-400">
-          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-blue-500 inline-block"></span> Accumulation</span>
-          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-orange-400 inline-block"></span> Distribution</span>
+          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-green-500 inline-block"></span> Conservative</span>
+          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-blue-500 inline-block"></span> Current</span>
+          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-red-500 inline-block"></span> Aggressive</span>
+          {% if result.current.withdrawal_years > 0 %}
+          <span class="flex items-center gap-1"><span class="w-4 h-0.5 bg-orange-400 inline-block" style="border-top: 2px dashed rgb(251,146,60);height:0"></span> Distribution</span>
+          {% endif %}
         </div>
-        {% endif %}
       </div>
       <div style="height: 420px;">
         <canvas id="monte-carlo-chart"></canvas>
       </div>
+    </div>
+
+    <!-- 3-column comparison cards: Conservative | Current | Aggressive -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {% if result.conservative %}
+        {{ result_card(result.conservative, 'green') }}
+      {% endif %}
+      {{ result_card(result.current, 'blue') }}
+      {% if result.aggressive %}
+        {{ result_card(result.aggressive, 'red') }}
+      {% endif %}
     </div>
 </div>
 {% endblock %}
@@ -320,9 +331,11 @@
 {% block scripts %}
 <script>
 const ctx = document.getElementById('monte-carlo-chart').getContext('2d');
-const accumYears = {{ years }};
-const currentData = {{ result.current.model_dump_json() | safe }};
-const targetData  = {{ result.target.model_dump_json() | safe if result.target else 'null' }};
+const accumYears      = {{ years }};
+const currentData     = {{ result.current.model_dump_json() | safe }};
+const targetData      = {{ result.target.model_dump_json() | safe if result.target else 'null' }};
+const conservativeData = {{ result.conservative.model_dump_json() | safe if result.conservative else 'null' }};
+const aggressiveData   = {{ result.aggressive.model_dump_json() | safe if result.aggressive else 'null' }};
 
 const withdrawalYears = currentData.withdrawal_years || 0;
 const totalYears      = accumYears + withdrawalYears;
@@ -379,7 +392,43 @@ if (withdrawalYears > 0 && currentData.withdrawal_trajectories.length) {
         data: phaseData(cDist, 'median', accumYears - 1, totalYears) });
 }
 
-// ── Target allocation (green) ─────────────────────────────────────────────────
+// ── Conservative allocation (green) ──────────────────────────────────────────
+if (conservativeData) {
+    const consAccum = conservativeData.trajectories;
+    datasets.push({ label: 'Conservative P10–P90', pointRadius: 0, fill: '+1',
+        backgroundColor: 'rgba(34,197,94,0.08)', borderColor: 'transparent',
+        data: phaseData(consAccum, 'p90', 0, totalYears) });
+    datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+        data: phaseData(consAccum, 'p10', 0, totalYears) });
+    datasets.push({ label: 'Conservative Median', pointRadius: 0, fill: false, tension: 0.3,
+        borderColor: 'rgb(34,197,94)', borderWidth: 2, borderDash: [5,5],
+        data: phaseData(consAccum, 'median', 0, totalYears) });
+    if (withdrawalYears > 0 && conservativeData.withdrawal_trajectories && conservativeData.withdrawal_trajectories.length) {
+        datasets.push({ label: 'Conservative Dist.', pointRadius: 0, fill: false, tension: 0.3,
+            borderColor: 'rgb(22,163,74)', borderWidth: 2, borderDash: [4,3],
+            data: phaseData(conservativeData.withdrawal_trajectories, 'median', accumYears - 1, totalYears) });
+    }
+}
+
+// ── Aggressive allocation (red) ───────────────────────────────────────────────
+if (aggressiveData) {
+    const aggrAccum = aggressiveData.trajectories;
+    datasets.push({ label: 'Aggressive P10–P90', pointRadius: 0, fill: '+1',
+        backgroundColor: 'rgba(239,68,68,0.07)', borderColor: 'transparent',
+        data: phaseData(aggrAccum, 'p90', 0, totalYears) });
+    datasets.push({ label: '', pointRadius: 0, fill: false, borderColor: 'transparent',
+        data: phaseData(aggrAccum, 'p10', 0, totalYears) });
+    datasets.push({ label: 'Aggressive Median', pointRadius: 0, fill: false, tension: 0.3,
+        borderColor: 'rgb(239,68,68)', borderWidth: 2, borderDash: [5,5],
+        data: phaseData(aggrAccum, 'median', 0, totalYears) });
+    if (withdrawalYears > 0 && aggressiveData.withdrawal_trajectories && aggressiveData.withdrawal_trajectories.length) {
+        datasets.push({ label: 'Aggressive Dist.', pointRadius: 0, fill: false, tension: 0.3,
+            borderColor: 'rgb(185,28,28)', borderWidth: 2, borderDash: [4,3],
+            data: phaseData(aggressiveData.withdrawal_trajectories, 'median', accumYears - 1, totalYears) });
+    }
+}
+
+// ── Target allocation (teal) — active profile comparison ─────────────────────
 if (targetData) {
     const tAccum = targetData.trajectories;
     datasets.push({ label: 'Target P10–P90', pointRadius: 0, fill: '+1',
@@ -390,12 +439,10 @@ if (targetData) {
     datasets.push({ label: 'Target Median', pointRadius: 0, fill: false, tension: 0.3,
         borderColor: 'rgb(16,185,129)', borderWidth: 2, borderDash: [5,5],
         data: phaseData(tAccum, 'median', 0, totalYears) });
-
     if (withdrawalYears > 0 && targetData.withdrawal_trajectories && targetData.withdrawal_trajectories.length) {
-        const tDist = targetData.withdrawal_trajectories;
         datasets.push({ label: 'Target Dist. Median', pointRadius: 0, fill: false, tension: 0.3,
             borderColor: 'rgb(5,150,105)', borderWidth: 2, borderDash: [4,3],
-            data: phaseData(tDist, 'median', accumYears - 1, totalYears) });
+            data: phaseData(targetData.withdrawal_trajectories, 'median', accumYears - 1, totalYears) });
     }
 }
 
