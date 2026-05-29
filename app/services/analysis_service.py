@@ -342,10 +342,15 @@ class AnalysisService:
         # First: use DB price history (instant, no network) — but only when
         # the DB has enough rows to meaningfully cover the requested lookback.
         # ~70% of calendar days are trading days, so require at least 60% coverage
-        # (e.g. for a 252-day window, require ≥150 rows).  Anything shorter means
-        # the DB is still being built and yfinance will give far better data.
+        # of *expected trading days* (calendar_days × 0.70 × 0.60 ≈ 42%).
+        # The hard minimum is 10 (not 30) so short lookbacks (e.g. 30 days → only
+        # ~22 trading days available) can still use DB data. The old max(30, ...)
+        # caused short-window lookbacks to always fall through to yfinance, which
+        # then returns 9 NaN weekend rows out of 30 → only 20 valid returns →
+        # the ">20" holding threshold silently fell through to assumed returns for
+        # every holding except crypto (BTC trades 7 days/week).
         calendar_days = max(1, (end_date - start_date).days)
-        min_rows_required = max(30, int(calendar_days * 0.60))
+        min_rows_required = max(10, int(calendar_days * 0.60))
 
         from app.models.asset import Asset as AssetModel
         db_assets = {
