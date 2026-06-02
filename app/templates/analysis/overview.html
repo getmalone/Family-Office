@@ -99,12 +99,27 @@
                     <span class="font-medium">{{ risk.concentration.top_10_weight_pct }}%</span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-gray-600">HHI Index</span>
+                    <span class="text-gray-600">HHI (shell)</span>
                     <span class="font-medium">{{ risk.concentration.hhi_index }}</span>
                 </div>
+                {% if risk.concentration.hhi_lookthrough is not none %}
+                <div class="flex justify-between items-center">
+                    <span class="text-gray-600">
+                        HHI (look-through)
+                        <span class="text-xs text-gray-400 ml-1">{{ risk.concentration.hhi_lookthrough_coverage_pct }}% expanded</span>
+                    </span>
+                    <span class="font-medium
+                        {% if risk.concentration.hhi_lookthrough | float >= 2500 %}text-red-600
+                        {% elif risk.concentration.hhi_lookthrough | float >= 1500 %}text-amber-600
+                        {% else %}text-green-600{% endif %}">
+                        {{ risk.concentration.hhi_lookthrough }}
+                    </span>
+                </div>
+                {% endif %}
                 <hr>
                 <div class="text-xs text-gray-400">
-                    HHI &lt; 1,500 = diversified | 1,500-2,500 = moderate | &gt; 2,500 = concentrated
+                    HHI &lt; 1,500 = diversified · 1,500–2,500 = moderate · &gt; 2,500 = concentrated<br>
+                    Look-through expands ETFs/funds to underlying securities.
                 </div>
             </div>
 

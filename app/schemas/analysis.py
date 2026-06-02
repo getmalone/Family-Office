@@ -24,12 +24,24 @@ class PositionRisk(BaseModel):
     risk_contribution_pct: Decimal | None
 
 
+class LookthroughPosition(BaseModel):
+    """One underlying security after ETF/fund expansion."""
+    symbol: str
+    weight_pct: Decimal          # portfolio-level weight (0–100)
+    via_fund: str | None = None  # fund it was expanded from, or None if direct holding
+
+
 class ConcentrationRisk(BaseModel):
     top_5_weight_pct: Decimal
     top_10_weight_pct: Decimal
     largest_position: str
     largest_position_weight_pct: Decimal
     hhi_index: Decimal
+    # Look-through HHI: ETFs/funds expanded to their underlying securities
+    hhi_lookthrough: Decimal | None = None
+    hhi_lookthrough_positions: int | None = None         # distinct underlying positions
+    hhi_lookthrough_coverage_pct: Decimal | None = None  # % of portfolio MV expanded
+    hhi_lookthrough_top: list[LookthroughPosition] = []  # top 15 underlying positions
 
 
 class AssetClassRisk(BaseModel):

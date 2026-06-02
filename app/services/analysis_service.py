@@ -25,6 +25,7 @@ from app.schemas.analysis import (
     CorrelationMatrix,
     DriftAnalysis,
     InvestmentProfileSchema,
+    LookthroughPosition,
     MonteCarloComparison,
     MonteCarloResult,
     PositionRisk,
@@ -263,12 +264,23 @@ class AnalysisService:
         hhi = sum(w ** 2 for w in sorted_weights)
         largest = max(summary.holdings, key=lambda h: h.weight_pct)
 
+        # Look-through HHI: expand each ETF/fund to its underlying securities
+        pub_syms = [h.symbol for h in summary.holdings if h.symbol]
+        fund_holdings_map = self._get_fund_holdings(pub_syms)
+        lt_hhi, lt_positions, lt_coverage, lt_top = self._compute_lookthrough_hhi(
+            summary.holdings, fund_holdings_map
+        )
+
         concentration = ConcentrationRisk(
             top_5_weight_pct=Decimal(str(round(top5, 2))),
             top_10_weight_pct=Decimal(str(round(top10, 2))),
             largest_position=largest.symbol or largest.name,
             largest_position_weight_pct=largest.weight_pct,
             hhi_index=Decimal(str(round(hhi, 2))),
+            hhi_lookthrough=Decimal(str(round(lt_hhi, 2))) if lt_hhi is not None else None,
+            hhi_lookthrough_positions=lt_positions,
+            hhi_lookthrough_coverage_pct=Decimal(str(round(lt_coverage, 1))) if lt_coverage is not None else None,
+            hhi_lookthrough_top=lt_top,
         )
 
         # Asset class risk (use same Var-normalised formula as position level)
@@ -419,6 +431,136 @@ class AnalysisService:
     ) -> np.ndarray | None:
         """Single-symbol returns (kept for backward compat; prefer _bulk_daily_returns)."""
         return self._bulk_daily_returns([symbol], start_date, end_date).get(symbol)
+
+    # ── Look-through HHI helpers ────────────────────────────────────────────
+
+    def _get_fund_holdings(
+        self, symbols: list[str]
+    ) -> dict[str, dict[str, float]]:
+        """
+        For each symbol that yfinance can expand (ETFs, mutual funds), return a
+        mapping {fund_symbol: {underlying_symbol: weight_fraction_of_fund}}.
+
+        weight_fraction_of_fund is in 0..1. Only symbols where yfinance returns
+        non-empty top_holdings are included; the rest are silently skipped.
+        Results are cached in-process for the life of this service instance to
+        avoid redundant network calls when the page is refreshed.
+        """
+        try:
+            import yfinance as yf
+            import pandas as pd
+        except ImportError:
+            return {}
+
+        if not hasattr(self, "_fund_holdings_cache"):
+            self._fund_holdings_cache: dict[str, dict[str, float]] = {}
+
+        result: dict[str, dict[str, float]] = {}
+        to_fetch = [s for s in symbols if s not in self._fund_holdings_cache]
+
+        for sym in to_fetch:
+            try:
+                fd = yf.Ticker(sym).funds_data
+                th = fd.top_holdings if fd is not None else None
+                if th is not None and not th.empty and "Holding Percent" in th.columns:
+                    holdings: dict[str, float] = {}
+                    for idx, row in th.iterrows():
+                        pct = row["Holding Percent"]
+                        if pd.notna(pct) and float(pct) > 0:
+                            holdings[str(idx)] = float(pct)
+                    self._fund_holdings_cache[sym] = holdings
+                else:
+                    self._fund_holdings_cache[sym] = {}  # no data — cache miss
+            except Exception:
+                self._fund_holdings_cache[sym] = {}
+
+        for sym in symbols:
+            h = self._fund_holdings_cache.get(sym, {})
+            if h:
+                result[sym] = h
+
+        return result
+
+    def _compute_lookthrough_hhi(
+        self,
+        holdings: list,  # list of HoldingSummary (have .symbol, .weight_pct, .name)
+        fund_holdings_map: dict[str, dict[str, float]],
+    ) -> tuple[float | None, int | None, float | None, list[LookthroughPosition]]:
+        """
+        Expand each fund/ETF in `holdings` to its underlying securities using
+        `fund_holdings_map`, then compute the look-through HHI.
+
+        Returns (hhi_lookthrough, num_positions, coverage_pct, top_15_positions).
+
+        coverage_pct = what fraction of portfolio MV was successfully expanded
+        (i.e. the portion whose fund top-holdings fractions sum to > 0).
+        """
+        if not holdings:
+            return None, None, None, []
+
+        # Aggregate look-through weights: underlying_sym -> portfolio weight pct
+        lt_weights: dict[str, float] = {}
+        # Track which fund each underlying came from (first appearance wins for display)
+        lt_source: dict[str, str | None] = {}
+        expanded_weight = 0.0  # running sum of portfolio weight that was expanded
+
+        for h in holdings:
+            sym = h.symbol
+            w = float(h.weight_pct)  # already in 0-100 range
+
+            if sym and sym in fund_holdings_map:
+                fh = fund_holdings_map[sym]  # {underlying: fraction_of_fund}
+                covered_fraction = sum(fh.values())  # what portion of fund is accounted for
+
+                # Expand each reported constituent
+                for underlying, fund_pct in fh.items():
+                    portfolio_pct = w * fund_pct  # weight in portfolio (still 0-100 scale)
+                    if underlying not in lt_weights:
+                        lt_source[underlying] = sym
+                    lt_weights[underlying] = lt_weights.get(underlying, 0.0) + portfolio_pct
+
+                # Unexplained remainder stays attributed to the fund shell itself
+                remainder_pct = max(0.0, 1.0 - covered_fraction)
+                if remainder_pct > 0:
+                    remainder_w = w * remainder_pct
+                    if sym not in lt_weights:
+                        lt_source[sym] = None  # direct / remainder
+                    lt_weights[sym] = lt_weights.get(sym, 0.0) + remainder_w
+
+                expanded_weight += w * covered_fraction
+
+            else:
+                # Direct holding or fund with no holdings data — count as-is
+                label = sym if sym else (h.name[:30] if h.name else "private")
+                if label not in lt_weights:
+                    lt_source[label] = None
+                lt_weights[label] = lt_weights.get(label, 0.0) + w
+
+        # Normalise to exactly 100% (floating-point drift correction)
+        total = sum(lt_weights.values())
+        if total <= 0:
+            return None, None, None, []
+        lt_weights = {k: v / total * 100.0 for k, v in lt_weights.items()}
+
+        # HHI (DOJ scale: weights in %, so max = 100² = 10,000)
+        hhi_lt = sum(w ** 2 for w in lt_weights.values())
+
+        # Coverage %: portfolio weight that was expanded through to constituents
+        total_port_weight = sum(float(h.weight_pct) for h in holdings)
+        coverage = (expanded_weight / total_port_weight * 100.0) if total_port_weight > 0 else 0.0
+
+        # Top 15 by portfolio weight for display
+        top15 = sorted(lt_weights.items(), key=lambda x: -x[1])[:15]
+        top_positions = [
+            LookthroughPosition(
+                symbol=sym,
+                weight_pct=Decimal(str(round(w, 2))),
+                via_fund=lt_source.get(sym),
+            )
+            for sym, w in top15
+        ]
+
+        return hhi_lt, len(lt_weights), coverage, top_positions
 
     def _empty_risk_metrics(self, lookback_days: int, risk_free_rate: float) -> RiskMetrics:
         return RiskMetrics(
