@@ -264,11 +264,26 @@ class AnalysisService:
         hhi = sum(w ** 2 for w in sorted_weights)
         largest = max(summary.holdings, key=lambda h: h.weight_pct)
 
-        # Look-through HHI: expand each ETF/fund to its underlying securities
-        pub_syms = [h.symbol for h in summary.holdings if h.symbol]
-        fund_holdings_map = self._get_fund_holdings(pub_syms)
+        # Look-through HHI: expand each ETF/fund to its underlying securities.
+        # For each holding use either its own symbol or a look_through_ticker
+        # (e.g. an institutional pool class that mirrors a public fund like FCNTX).
+        from app.models.asset import Asset as AssetModel
+        lt_ticker_map: dict[str, str] = {}  # holding_symbol_or_id → lookup_ticker
+        for h in summary.holdings:
+            asset = self.session.get(AssetModel, h.asset_id)
+            if asset and asset.look_through_ticker:
+                # Use the fund's own symbol (or asset_id label) as key → public ticker
+                key = h.symbol or f"asset_{h.asset_id}"
+                lt_ticker_map[key] = asset.look_through_ticker
+
+        # Build the full set of tickers to fetch from yfinance
+        direct_syms = [h.symbol for h in summary.holdings if h.symbol]
+        alias_syms   = list(lt_ticker_map.values())
+        all_lookup_syms = list(set(direct_syms + alias_syms))
+        fund_holdings_map = self._get_fund_holdings(all_lookup_syms)
+
         lt_hhi, lt_positions, lt_coverage, lt_top = self._compute_lookthrough_hhi(
-            summary.holdings, fund_holdings_map
+            summary.holdings, fund_holdings_map, lt_ticker_map
         )
 
         concentration = ConcentrationRisk(
@@ -485,18 +500,24 @@ class AnalysisService:
         self,
         holdings: list,  # list of HoldingSummary (have .symbol, .weight_pct, .name)
         fund_holdings_map: dict[str, dict[str, float]],
+        lt_ticker_map: dict[str, str] | None = None,
     ) -> tuple[float | None, int | None, float | None, list[LookthroughPosition]]:
         """
         Expand each fund/ETF in `holdings` to its underlying securities using
         `fund_holdings_map`, then compute the look-through HHI.
 
-        Returns (hhi_lookthrough, num_positions, coverage_pct, top_15_positions).
+        lt_ticker_map maps holding_symbol → public lookup ticker for institutional
+        fund classes that mirror a public fund (e.g. Contrafund Pool → FCNTX).
+        When a holding's own symbol has no fund_holdings_map entry, the lookup
+        ticker is tried instead.
 
-        coverage_pct = what fraction of portfolio MV was successfully expanded
-        (i.e. the portion whose fund top-holdings fractions sum to > 0).
+        Returns (hhi_lookthrough, num_positions, coverage_pct, top_15_positions).
+        coverage_pct = what fraction of portfolio MV was successfully expanded.
         """
         if not holdings:
             return None, None, None, []
+
+        lt_ticker_map = lt_ticker_map or {}
 
         # Aggregate look-through weights: underlying_sym -> portfolio weight pct
         lt_weights: dict[str, float] = {}
@@ -508,24 +529,39 @@ class AnalysisService:
             sym = h.symbol
             w = float(h.weight_pct)  # already in 0-100 range
 
-            if sym and sym in fund_holdings_map:
-                fh = fund_holdings_map[sym]  # {underlying: fraction_of_fund}
-                covered_fraction = sum(fh.values())  # what portion of fund is accounted for
+            # Resolve which ticker to look up: prefer direct symbol, fall back to alias
+            lookup_sym = sym
+            display_label = sym  # what to show as the "fund" in ↳ attribution
+            if sym and sym not in fund_holdings_map and sym in lt_ticker_map:
+                lookup_sym = lt_ticker_map[sym]
+                display_label = f"{sym} ({lookup_sym})"
+            elif not sym:
+                key = f"asset_{h.asset_id}" if hasattr(h, 'asset_id') else None
+                if key and key in lt_ticker_map:
+                    lookup_sym = lt_ticker_map[key]
+                    display_label = h.name[:20] if h.name else key
+
+            if lookup_sym and lookup_sym in fund_holdings_map:
+                fh = fund_holdings_map[lookup_sym]  # {underlying: fraction_of_fund}
+                covered_fraction = sum(fh.values())
 
                 # Expand each reported constituent
                 for underlying, fund_pct in fh.items():
-                    portfolio_pct = w * fund_pct  # weight in portfolio (still 0-100 scale)
+                    portfolio_pct = w * fund_pct
                     if underlying not in lt_weights:
-                        lt_source[underlying] = sym
+                        lt_source[underlying] = display_label
                     lt_weights[underlying] = lt_weights.get(underlying, 0.0) + portfolio_pct
 
                 # Unexplained remainder stays attributed to the fund shell itself
                 remainder_pct = max(0.0, 1.0 - covered_fraction)
                 if remainder_pct > 0:
                     remainder_w = w * remainder_pct
-                    if sym not in lt_weights:
-                        lt_source[sym] = None  # direct / remainder
-                    lt_weights[sym] = lt_weights.get(sym, 0.0) + remainder_w
+                    shell_label = sym or (h.name[:20] if h.name else "fund")
+                    if shell_label not in lt_weights:
+                        # Mark remainder as via the lookup ticker so the UI shows
+                        # "↳ FCNTX (rem.)" rather than "(direct)" for the unexplained portion
+                        lt_source[shell_label] = f"{lookup_sym} rem."
+                    lt_weights[shell_label] = lt_weights.get(shell_label, 0.0) + remainder_w
 
                 expanded_weight += w * covered_fraction
 

@@ -56,6 +56,15 @@ def _apply_migrations(engine: Engine) -> None:
     migrations = [
         "ALTER TABLE investment_profiles ADD COLUMN is_comparison_a BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE investment_profiles ADD COLUMN is_comparison_b BOOLEAN NOT NULL DEFAULT 0",
+        # look_through_ticker: public-market equivalent used only for HHI look-through
+        "ALTER TABLE assets ADD COLUMN look_through_ticker VARCHAR(20)",
+    ]
+    # Data migrations: set look_through_ticker for known institutional fund classes
+    # whose holdings mirror a publicly-listed fund on Yahoo Finance.
+    data_migrations = [
+        # Fidelity Contrafund Pool Cl F (CUSIP 31617E745) mirrors FCNTX
+        ("UPDATE assets SET look_through_ticker = 'FCNTX' "
+         "WHERE cusip = '31617E745' AND look_through_ticker IS NULL"),
     ]
     with engine.connect() as conn:
         for stmt in migrations:
@@ -64,6 +73,12 @@ def _apply_migrations(engine: Engine) -> None:
                 conn.commit()
             except Exception:
                 pass  # column already exists — safe to ignore
+        for stmt in data_migrations:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                pass
 
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:

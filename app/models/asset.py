@@ -40,6 +40,11 @@ class Asset(Base, TimestampMixin):
     sector: Mapped[str | None] = mapped_column(String(100), nullable=True)
     exchange: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_qsbs_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Optional public-market equivalent ticker used *only* for look-through HHI.
+    # Set this on institutional / pooled-class funds that mirror a publicly-listed
+    # fund (e.g. "Fidelity Contrafund Pool Cl F" → look_through_ticker="FCNTX").
+    # Does NOT affect price fetching — only the concentration analysis.
+    look_through_ticker: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class AssetPrice(Base):
