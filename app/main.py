@@ -82,16 +82,24 @@ async def wiki():
 
 @app.on_event("startup")
 def startup():
-    """Initialize the database and load any DB-stored app settings."""
+    """Initialize the database, seed system defaults, and load app settings."""
     init_db()
-    # Load user-configured settings (e.g. Anthropic API key) from the encrypted
-    # DB into the live config, so they apply without any .env editing.
     try:
         from app.services.db import get_factory
         from app.services.app_settings import load_into_settings
+        from app.services.analysis_service import AnalysisService
 
         session = get_factory()()
         try:
+            # Seed the system investment profiles if missing. Idempotent: it only
+            # adds profiles absent by name, so a fresh install gets all of them
+            # and an existing database picks up newly-shipped strategy profiles on
+            # the next launch — without touching the user's active selection or
+            # any custom profiles.
+            AnalysisService(session).seed_default_profiles()
+            session.commit()
+            # Load user-configured settings (e.g. Anthropic API key) from the
+            # encrypted DB so they apply without any .env editing.
             load_into_settings(session)
         finally:
             session.close()
