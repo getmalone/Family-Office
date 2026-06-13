@@ -83,6 +83,7 @@ DEFAULT_PROFILES: list[dict] = [
     {
         "name": "Balanced",
         "risk_tolerance": "balanced",
+        "is_active": True,  # default active profile on a fresh database
         "description": "Equal emphasis on growth and stability. Diversified across major asset classes.",
         "allocations": {
             "us_equity": 35, "intl_equity": 15, "fixed_income": 25,
@@ -111,6 +112,73 @@ DEFAULT_PROFILES: list[dict] = [
             "real_estate": 5, "commodity": 3, "cash": 0, "alternative": 2,
             "crypto": 10, "private_equity": 8, "venture_capital": 5,
             "hedge_fund": 2, "other": 0,
+        },
+    },
+    # ── Strategy-based profiles (common investment strategies) ───────────────
+    {
+        "name": "Income",
+        "risk_tolerance": "conservative",
+        "description": "Retirement income & capital preservation. High-quality bonds, dividend equity, and cash for steady yield.",
+        "allocations": {
+            "us_equity": 15, "intl_equity": 5, "fixed_income": 45,
+            "real_estate": 10, "commodity": 0, "cash": 20, "alternative": 5,
+            "crypto": 0, "private_equity": 0, "venture_capital": 0,
+            "hedge_fund": 0, "other": 0,
+        },
+    },
+    {
+        "name": "60/40 Classic",
+        "risk_tolerance": "balanced",
+        "description": "The classic 60/40 portfolio — 60% diversified equities, 40% high-quality bonds.",
+        "allocations": {
+            "us_equity": 40, "intl_equity": 20, "fixed_income": 40,
+            "real_estate": 0, "commodity": 0, "cash": 0, "alternative": 0,
+            "crypto": 0, "private_equity": 0, "venture_capital": 0,
+            "hedge_fund": 0, "other": 0,
+        },
+    },
+    {
+        "name": "Three-Fund Index",
+        "risk_tolerance": "growth",
+        "description": "Low-cost Boglehead three-fund: total US equity, total international equity, and total bond market.",
+        "allocations": {
+            "us_equity": 50, "intl_equity": 20, "fixed_income": 30,
+            "real_estate": 0, "commodity": 0, "cash": 0, "alternative": 0,
+            "crypto": 0, "private_equity": 0, "venture_capital": 0,
+            "hedge_fund": 0, "other": 0,
+        },
+    },
+    {
+        "name": "All-Weather (Risk Parity)",
+        "risk_tolerance": "moderate",
+        "description": "Ray Dalio-inspired all-weather mix engineered to hold up across growth and inflation regimes.",
+        "allocations": {
+            "us_equity": 18, "intl_equity": 12, "fixed_income": 55,
+            "real_estate": 5, "commodity": 10, "cash": 0, "alternative": 0,
+            "crypto": 0, "private_equity": 0, "venture_capital": 0,
+            "hedge_fund": 0, "other": 0,
+        },
+    },
+    {
+        "name": "Permanent Portfolio",
+        "risk_tolerance": "conservative",
+        "description": "Harry Browne's permanent portfolio: equal split of stocks, long bonds, cash, and gold (commodities).",
+        "allocations": {
+            "us_equity": 25, "intl_equity": 0, "fixed_income": 25,
+            "real_estate": 0, "commodity": 25, "cash": 25, "alternative": 0,
+            "crypto": 0, "private_equity": 0, "venture_capital": 0,
+            "hedge_fund": 0, "other": 0,
+        },
+    },
+    {
+        "name": "Endowment (Yale-Style)",
+        "risk_tolerance": "aggressive",
+        "description": "Yale-model endowment: heavy private markets and real assets, low public bonds. For long horizons with illiquidity tolerance.",
+        "allocations": {
+            "us_equity": 15, "intl_equity": 10, "fixed_income": 10,
+            "real_estate": 10, "commodity": 5, "cash": 0, "alternative": 5,
+            "crypto": 0, "private_equity": 20, "venture_capital": 10,
+            "hedge_fund": 15, "other": 0,
         },
     },
 ]
@@ -1461,7 +1529,7 @@ class AnalysisService:
                     name=profile_data["name"],
                     risk_tolerance=RiskToleranceEnum(profile_data["risk_tolerance"]),
                     is_system=True,
-                    is_active=(profile_data["risk_tolerance"] == "balanced"),  # Default active
+                    is_active=profile_data.get("is_active", False),  # only one true (Balanced)
                     description=profile_data["description"],
                     target_allocations_json=json.dumps(
                         {k: str(v) for k, v in profile_data["allocations"].items()}
