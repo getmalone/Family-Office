@@ -1,0 +1,46 @@
+{
+  "name": "Kelly Family Office",
+  "short_name": "Family Office",
+  "description": "Private wealth management — portfolio, tax, accounting, estate, and retirement planning. Works offline.",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "categories": ["finance", "productivity", "business"],
+  "icons": [
+    {
+      "src": "/static/icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "url": "/?source=pwa-shortcut",
+      "icons": [{ "src": "/static/icons/app-icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Morning Brief",
+      "short_name": "Brief",
+      "url": "/analysis/morning?source=pwa-shortcut"
+    },
+    {
+      "name": "Approvals",
+      "short_name": "Approvals",
+      "url": "/approvals/?source=pwa-shortcut"
+    }
+  ]
+}

@@ -130,31 +130,58 @@ class MarketDataService:
             price = Decimal(str(round(row["Close"], 6)))
             today = date.today()
 
-            existing = (
-                self.session.query(AssetPrice)
-                .filter(AssetPrice.asset_id == asset.id, AssetPrice.price_date == today)
-                .first()
-            )
-            if existing:
-                existing.close_price = price
-                existing.high_price = Decimal(str(round(row.get("High", 0), 6)))
-                existing.low_price = Decimal(str(round(row.get("Low", 0), 6)))
-                existing.volume = int(row.get("Volume", 0))
-            else:
-                self.session.add(
-                    AssetPrice(
-                        asset_id=asset.id,
-                        price_date=today,
-                        close_price=price,
-                        high_price=Decimal(str(round(row.get("High", 0), 6))),
-                        low_price=Decimal(str(round(row.get("Low", 0), 6))),
-                        volume=int(row.get("Volume", 0)),
-                        source="yfinance",
-                    )
-                )
-            self.session.flush()
+            # Persist the fresh quote through a short-lived, immediately-committed
+            # session rather than the request-scoped one. This keeps the SQLite
+            # write lock held only for the duration of this tiny write instead of
+            # for the whole request — so concurrent page loads (multiple devices
+            # on the network) don't deadlock — and a write failure can never
+            # leave the caller's session in a poisoned/rolled-back state.
+            self._persist_price(asset.id, today, price, row)
             return price
 
         except Exception:
             # Fallback to latest cached price
             return self._get_latest_manual_price(asset.id) if asset.id else None
+
+    def _persist_price(self, asset_id: int, price_date: date, price: Decimal, row) -> None:
+        """Upsert a daily price in its own committed transaction.
+
+        Failures (e.g. a transient ``database is locked`` under heavy concurrent
+        load) are swallowed: the live price is still returned to the caller, it
+        just isn't cached on this pass.
+        """
+        from app.services.db import get_factory
+
+        try:
+            with get_factory()() as wsession:
+                existing = (
+                    wsession.query(AssetPrice)
+                    .filter(
+                        AssetPrice.asset_id == asset_id,
+                        AssetPrice.price_date == price_date,
+                    )
+                    .first()
+                )
+                high = Decimal(str(round(row.get("High", 0), 6)))
+                low = Decimal(str(round(row.get("Low", 0), 6)))
+                volume = int(row.get("Volume", 0))
+                if existing:
+                    existing.close_price = price
+                    existing.high_price = high
+                    existing.low_price = low
+                    existing.volume = volume
+                else:
+                    wsession.add(
+                        AssetPrice(
+                            asset_id=asset_id,
+                            price_date=price_date,
+                            close_price=price,
+                            high_price=high,
+                            low_price=low,
+                            volume=volume,
+                            source="yfinance",
+                        )
+                    )
+                wsession.commit()
+        except Exception:
+            pass

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Offline - Family Office</title>
+  <link rel="icon" href="/static/icons/app-icon.svg" type="image/svg+xml">
+  <style>
+    /* Self-contained styles so this page renders with no network and no framework. */
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a; color: #e2e8f0; padding: 24px;
+    }
+    .card {
+      max-width: 460px; text-align: center; background: #1e293b; border: 1px solid #334155;
+      border-radius: 16px; padding: 40px 32px; box-shadow: 0 20px 50px rgba(0,0,0,.4);
+    }
+    img { width: 72px; height: 72px; margin-bottom: 20px; }
+    h1 { font-size: 1.4rem; margin: 0 0 10px; }
+    p { color: #94a3b8; line-height: 1.55; margin: 0 0 24px; }
+    .pages { list-style: none; padding: 0; margin: 0 0 24px; display: grid; gap: 8px; }
+    .pages a {
+      display: block; text-decoration: none; color: #e2e8f0; background: #0f172a;
+      border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; font-size: .95rem;
+    }
+    .pages a:hover { background: #334155; }
+    button {
+      background: #2563eb; color: #fff; border: 0; border-radius: 10px;
+      padding: 12px 22px; font-size: 1rem; cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    .hint { font-size: .8rem; color: #64748b; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="/static/icons/app-icon.svg" alt="Family Office">
+    <h1>You're offline</h1>
+    <p>No network connection right now. Any page you've already opened is still available below — your last-loaded data is cached on this device.</p>
+    <ul class="pages">
+      <li><a href="/">Dashboard</a></li>
+      <li><a href="/portfolio/">Portfolio</a></li>
+      <li><a href="/analysis/morning">Morning Brief</a></li>
+      <li><a href="/approvals/">Approvals</a></li>
+    </ul>
+    <button onclick="location.reload()">Try again</button>
+    <p class="hint">Live prices, AI chat, and saving changes need a connection.</p>
+  </div>
+  <script>
+    // Auto-recover: when the connection returns, reload to the live app.
+    window.addEventListener("online", () => location.reload());
+  </script>
+</body>
+</html>

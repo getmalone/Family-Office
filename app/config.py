@@ -8,6 +8,7 @@ or from a .env file in the project root.
 from decimal import Decimal
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 # Absolute path to the .env file regardless of cwd when the server starts
@@ -45,6 +46,20 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    # Web access control.
+    # When access_code is empty (default), the app is open — preserving the
+    # local-first, single-user experience on 127.0.0.1. Set KFO_ACCESS_CODE to a
+    # shared passphrase before exposing the app on a network (KFO_HOST=0.0.0.0)
+    # so every request must authenticate via the /login page.
+    access_code: str = ""
+    # Days a login session cookie stays valid.
+    session_max_age_days: int = 30
+
+    # Single master password (set by the desktop launcher at startup). One secret
+    # that both encrypts the database and — when the app is exposed on a network —
+    # gates the web UI. See the validator below for how it's applied.
+    master_password: str = ""
+
     # Encryption key for application-level field encryption (SSNs, tax IDs)
     field_encryption_key: str = ""
 
@@ -53,6 +68,27 @@ class Settings(BaseSettings):
         "env_file": str(_ENV_FILE),
         "env_file_encoding": "utf-8",
     }
+
+    @model_validator(mode="after")
+    def _apply_master_password(self) -> "Settings":
+        """Derive the DB key and (network-only) web gate from the master password.
+
+        - ``db_passphrase`` is always filled from the master password when not set
+          explicitly, so the database is encrypted at rest. SQLCipher runs its own
+          PBKDF2 over the passphrase, so the raw value is used directly.
+        - ``access_code`` is filled only when the app is bound to all interfaces
+          (``0.0.0.0``), i.e. exposed on a network — that's when a login gate is
+          warranted. On localhost the single launcher prompt is enough, so the
+          browser isn't asked for the password a second time.
+
+        Explicitly-set values always win; this only fills blanks.
+        """
+        if self.master_password:
+            if not self.db_passphrase:
+                self.db_passphrase = self.master_password
+            if not self.access_code and self.host == "0.0.0.0":
+                self.access_code = self.master_password
+        return self
 
     @property
     def db_url(self) -> str:

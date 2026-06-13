@@ -86,9 +86,56 @@ The core philosophy is _human-in-the-loop for material decisions, AI for everyth
 ### Entry Point
 
 ```bash
-cd family-office
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# One-time setup (Python 3.12+). uv is the quickest cross-platform path:
+uv venv --python 3.12 .venv
+uv pip install -e ".[dev]"
+
+# Run locally
+./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# …or simply:
+./.venv/bin/python -m app
 ```
+
+Then open http://127.0.0.1:8000.
+
+### Web & Offline (PWA)
+
+The dashboard is an installable **Progressive Web App** that works without an
+internet connection.
+
+**Use it from any device on your network**
+
+```bash
+# Binds 0.0.0.0 and prints the LAN URL to open on a phone/tablet.
+# Always set an access code before exposing the app off-localhost.
+KFO_ACCESS_CODE=your-passphrase ./scripts/serve.sh
+```
+
+On the phone/laptop browser, open the printed `http://<lan-ip>:8000` URL and
+choose **Add to Home Screen** / **Install** to get a standalone app icon.
+
+**Offline behaviour**
+
+- All front-end libraries (Tailwind, HTMX, Chart.js) are **vendored locally**
+  under `static/vendor/` — nothing loads from a CDN, so the UI renders with no
+  network.
+- A service worker (`/service-worker.js`, root scope) precaches the app shell
+  and caches each page you visit. Navigations are **network-first** (fresh data
+  when online) and fall back to the last cached copy — or a friendly
+  `/offline` page — when the connection drops. An **Offline** badge appears in
+  the nav, and the app auto-reloads when connectivity returns.
+- Live prices, AI chat, and saving changes still require a connection.
+
+**Access control** — The app is open by default (local-first, single user).
+Set `KFO_ACCESS_CODE` to require a shared passphrase at `/login` on every
+request; the PWA shell (`/service-worker.js`, `/manifest.webmanifest`,
+`/offline`, `/static/*`, `/health`) stays reachable so the app can still boot
+offline. Sessions are stateless signed cookies (see [`app/web.py`](app/web.py)).
+
+> **Note:** the vendored Tailwind is the Play CDN runtime build (it logs a
+> "not for production" notice). It's perfect for this offline-first single-family
+> deployment; switch to a compiled Tailwind stylesheet if you later need a
+> minimal production bundle.
 
 ---
 

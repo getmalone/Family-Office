@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Sign in - Family Office</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#1e293b">
+  <link rel="icon" href="/static/icons/app-icon.svg" type="image/svg+xml">
+  <script src="/static/vendor/tailwind.min.js"></script>
+</head>
+<body class="min-h-screen bg-slate-900 flex items-center justify-center p-6">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-6">
+      <img src="/static/icons/app-icon.svg" alt="" class="w-16 h-16 mx-auto mb-3">
+      <h1 class="text-xl font-semibold text-slate-100">Kelly Family Office</h1>
+      <p class="text-sm text-slate-400 mt-1">Enter the access code to continue.</p>
+    </div>
+
+    <form method="post" action="/login" class="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl">
+      <input type="hidden" name="next" value="{{ next }}">
+
+      {% if error %}
+      <div class="mb-4 rounded-lg bg-red-500/15 border border-red-500/40 px-3 py-2 text-sm text-red-300">
+        {{ error }}
+      </div>
+      {% endif %}
+
+      <label for="code" class="block text-sm font-medium text-slate-300 mb-1.5">Access code</label>
+      <input id="code" name="code" type="password" autocomplete="current-password" required autofocus
+             class="w-full rounded-lg bg-slate-900 border border-slate-600 text-slate-100 px-3 py-2.5
+                    focus:border-sky-500 focus:ring-1 focus:ring-sky-500 outline-none">
+
+      <button type="submit"
+              class="mt-4 w-full rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium py-2.5 transition-colors">
+        Sign in
+      </button>
+    </form>
+
+    <p class="text-center text-xs text-slate-500 mt-4">Private &amp; encrypted. Authorized family members only.</p>
+  </div>
+</body>
+</html>

@@ -8,7 +8,11 @@ estate planning.
 """
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
+    # Pin to the 0.115 line the app was built against: FastAPI >=0.116 pulls
+    # Starlette 1.x, which removed the legacy TemplateResponse(name, context)
+    # signature used throughout the route handlers.
+    "fastapi>=0.115,<0.116",
+    "starlette<0.42",
     "uvicorn[standard]>=0.34",
     "jinja2>=3.1",
     "python-multipart>=0.0.18",
@@ -25,8 +29,17 @@ dependencies = [
     "yfinance>=0.2",
     "httpx>=0.28",
     "python-dotenv>=1.0",
-    "cryptography>=44.0",
+    # Cap below 49: cryptography 49 dropped x86_64 macOS wheels (arm64-only),
+    # which would force a from-source build on Intel Macs. 48.x ships wheels for
+    # every target (Intel/ARM macOS, Windows, Linux) — keeps installs compiler-free.
+    "cryptography>=44.0,<49",
     "sse-starlette>=2.0",
+    # Renders the in-app Help page (USAGE.md). Pure-Python, universal wheel.
+    "markdown>=3.5",
+    # SQLCipher (AES-256 encryption at rest). Prebuilt, cross-platform wheels
+    # so installs need no compiler or system libsqlcipher. Activated when
+    # KFO_DB_PASSPHRASE is set; see app/services/db.py.
+    "sqlcipher3-wheels>=0.5.7",
 ]
 
 [project.optional-dependencies]

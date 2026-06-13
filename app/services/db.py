@@ -17,22 +17,65 @@ from app.config import Settings, settings
 from app.models.base import Base
 
 
+def is_db_encrypted(cfg: Settings | None = None) -> bool:
+    """True when a passphrase is configured, i.e. the DB is encrypted at rest."""
+    cfg = cfg or settings
+    return bool(cfg.db_passphrase)
+
+
+def _sqlcipher_key_pragma(passphrase: str) -> str:
+    """Build the ``PRAGMA key`` statement, escaping the passphrase safely.
+
+    SQLCipher runs its own KDF over the passphrase, so a plain quoted string is
+    the correct form. Single quotes are doubled to avoid SQL breakage.
+    """
+    escaped = passphrase.replace("'", "''")
+    return f"PRAGMA key = '{escaped}'"
+
+
 def create_db_engine(cfg: Settings | None = None) -> Engine:
-    """Create and configure the SQLAlchemy engine."""
+    """Create and configure the SQLAlchemy engine.
+
+    When ``cfg.db_passphrase`` is set, the database is opened through SQLCipher
+    (transparent AES-256 encryption at rest); otherwise a plain SQLite file is
+    used. Encryption is opt-in via ``KFO_DB_PASSPHRASE`` and fully backward
+    compatible with existing unencrypted databases.
+    """
     cfg = cfg or settings
 
-    # Ensure data directory exists
-    db_path = Path(cfg.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Ensure data directory exists (skip for in-memory databases).
+    if cfg.db_path != ":memory:":
+        Path(cfg.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    engine = create_engine(cfg.db_url, echo=False, pool_pre_ping=True)
+    passphrase = cfg.db_passphrase or ""
+    encrypted = bool(passphrase)
+
+    engine_kwargs: dict = dict(echo=False, pool_pre_ping=True)
+    if encrypted:
+        try:
+            from sqlcipher3 import dbapi2 as sqlcipher
+        except ImportError as exc:  # pragma: no cover - only without the wheel
+            raise RuntimeError(
+                "KFO_DB_PASSPHRASE is set (encrypted database requested) but the "
+                "'sqlcipher3-wheels' package is not installed. "
+                "Run: uv pip install sqlcipher3-wheels"
+            ) from exc
+        engine_kwargs["module"] = sqlcipher
+
+    engine = create_engine(cfg.db_url, **engine_kwargs)
 
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
+        # PRAGMA key MUST be the first statement on a SQLCipher connection,
+        # before any other access to the database.
+        if encrypted:
+            cursor.execute(_sqlcipher_key_pragma(passphrase))
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        # Wait (rather than immediately erroring) for a contended write lock —
+        # important when several devices load pages that refresh live prices at once.
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
     return engine

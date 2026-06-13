@@ -235,6 +235,10 @@ def monte_carlo_page(
     spending_pattern: str = Query("constant"),
     smile_slow_pct: float = Query(80.0, ge=0, le=100),
     smile_no_pct: float = Query(65.0, ge=0, le=100),
+    current_age: int | None = Query(None, ge=18, le=100),
+    retirement_age: int | None = Query(None, ge=30, le=100),
+    ssa_claiming_age: int | None = Query(None, ge=62, le=70),
+    ssa_monthly: str | None = Query(None),  # est. monthly benefit at Full Retirement Age (67)
     db: Session = Depends(get_db),
 ):
     """Monte Carlo simulation page."""
@@ -259,6 +263,9 @@ def monte_carlo_page(
     # Only run distribution phase when a nonzero rate was supplied
     wdraw_years_int = withdrawal_years if wdraw_decimal > 0 else 0
 
+    ssa_monthly_decimal = _to_decimal(ssa_monthly) or Decimal("0")
+    ssa_monthly_display = float(ssa_monthly_decimal) if ssa_monthly_decimal else None
+
     # Normalise override: treat "auto"/None the same way (service auto-detects)
     regime_ov = regime_override.lower().strip() if regime_override else None
     if regime_ov == "auto":
@@ -275,6 +282,10 @@ def monte_carlo_page(
         spending_pattern=spending_pattern,
         smile_slow_pct=smile_slow_pct,
         smile_no_pct=smile_no_pct,
+        current_age=current_age,
+        retirement_age=retirement_age,
+        ssa_claiming_age=ssa_claiming_age,
+        ssa_monthly_fra=ssa_monthly_decimal,
     )
 
     return templates.TemplateResponse(
@@ -292,6 +303,10 @@ def monte_carlo_page(
             "spending_pattern": spending_pattern,
             "smile_slow_pct": smile_slow_pct,
             "smile_no_pct": smile_no_pct,
+            "current_age": current_age,
+            "retirement_age": retirement_age,
+            "ssa_claiming_age": ssa_claiming_age,
+            "ssa_monthly": ssa_monthly_display,
             "page_title": "Monte Carlo",
         },
     )
@@ -328,6 +343,10 @@ def api_monte_carlo(
     spending_pattern: str = Query("constant"),
     smile_slow_pct: float = Query(80.0, ge=0, le=100),
     smile_no_pct: float = Query(65.0, ge=0, le=100),
+    current_age: int | None = Query(None, ge=18, le=100),
+    retirement_age: int | None = Query(None, ge=30, le=100),
+    ssa_claiming_age: int | None = Query(None, ge=62, le=70),
+    ssa_monthly: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """Return Monte Carlo results as JSON for Chart.js rendering."""
@@ -345,6 +364,7 @@ def api_monte_carlo(
     contrib_decimal = _to_decimal(monthly_contribution) or Decimal("0")
     wdraw_decimal   = _to_decimal(withdrawal_rate) or Decimal("0")
     wdraw_years     = withdrawal_years if wdraw_decimal > 0 else 0
+    ssa_monthly_decimal = _to_decimal(ssa_monthly) or Decimal("0")
 
     regime_ov = regime_override.lower().strip() if regime_override else None
     if regime_ov == "auto":
@@ -361,5 +381,9 @@ def api_monte_carlo(
         spending_pattern=spending_pattern,
         smile_slow_pct=smile_slow_pct,
         smile_no_pct=smile_no_pct,
+        current_age=current_age,
+        retirement_age=retirement_age,
+        ssa_claiming_age=ssa_claiming_age,
+        ssa_monthly_fra=ssa_monthly_decimal,
     )
     return JSONResponse(content=result.model_dump(mode="json"))

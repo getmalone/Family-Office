@@ -13,12 +13,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.services.db import init_db
+from app.web import AccessCodeMiddleware
 
 app = FastAPI(
     title="Family Office",
     description="Agentic AI Wealth Management System",
     version="0.1.0",
 )
+
+# Optional shared-passcode gate for network/web exposure (no-op when KFO_ACCESS_CODE
+# is unset, preserving the local-first single-user experience).
+app.add_middleware(AccessCodeMiddleware)
 
 # Mount static files
 static_dir = Path(__file__).parent.parent / "static"
@@ -42,7 +47,15 @@ from app.api.agent_chat import router as agent_router
 from app.api.health import router as health_router
 from app.api.analysis import router as analysis_router
 from app.api.prices import router as prices_router
+from app.api.pwa import router as pwa_router
+from app.api.settings import router as settings_router
+from app.api.help import router as help_router
+from app.web import router as auth_router
 
+app.include_router(pwa_router)
+app.include_router(auth_router)
+app.include_router(help_router)
+app.include_router(settings_router, prefix="/settings", tags=["Settings"])
 app.include_router(dashboard_router)
 app.include_router(portfolio_router, prefix="/portfolio", tags=["Portfolio"])
 app.include_router(tax_router, prefix="/tax", tags=["Tax"])
@@ -69,5 +82,18 @@ async def wiki():
 
 @app.on_event("startup")
 def startup():
-    """Initialize database on server startup."""
+    """Initialize the database and load any DB-stored app settings."""
     init_db()
+    # Load user-configured settings (e.g. Anthropic API key) from the encrypted
+    # DB into the live config, so they apply without any .env editing.
+    try:
+        from app.services.db import get_factory
+        from app.services.app_settings import load_into_settings
+
+        session = get_factory()()
+        try:
+            load_into_settings(session)
+        finally:
+            session.close()
+    except Exception:
+        pass

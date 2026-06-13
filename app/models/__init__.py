@@ -18,8 +18,10 @@ from app.models.approval import Approval, ApprovalPolicy, ApprovalStatusEnum
 from app.models.estate import Gift, GRATSimulation
 from app.models.report import GeneratedReport, ComplianceFlag
 from app.models.investment_profile import InvestmentProfile, RiskToleranceEnum
+from app.models.app_setting import AppSetting
 
 __all__ = [
+    "AppSetting",
     "Base",
     "TimestampMixin",
     "FamilyMember",

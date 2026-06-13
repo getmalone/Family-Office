@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="bg-white shadow rounded-lg p-8">
+    <div class="doc">{{ doc | safe }}</div>
+  </div>
+</div>
+
+<style>
+  /* Readable typography for the rendered Markdown guide. */
+  .doc { color: #334155; line-height: 1.65; font-size: 0.95rem; }
+  .doc h1 { font-size: 1.7rem; font-weight: 700; color: #0f172a; margin: 0 0 .5rem; }
+  .doc h2 { font-size: 1.3rem; font-weight: 700; color: #0f172a; margin: 2rem 0 .75rem; padding-bottom: .3rem; border-bottom: 1px solid #e2e8f0; }
+  .doc h3 { font-size: 1.08rem; font-weight: 600; color: #1e293b; margin: 1.4rem 0 .5rem; }
+  .doc p { margin: 0 0 .9rem; }
+  .doc a { color: #2563eb; text-decoration: underline; }
+  .doc ul, .doc ol { margin: 0 0 .9rem 1.4rem; }
+  .doc ul { list-style: disc; }
+  .doc ol { list-style: decimal; }
+  .doc li { margin: .25rem 0; }
+  .doc hr { border: 0; border-top: 1px solid #e2e8f0; margin: 1.75rem 0; }
+  .doc code { background: #f1f5f9; color: #0f172a; padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
+  .doc pre { background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: .5rem; overflow-x: auto; margin: 0 0 1rem; }
+  .doc pre code { background: transparent; color: inherit; padding: 0; }
+  .doc table { width: 100%; border-collapse: collapse; margin: 0 0 1.2rem; font-size: .9rem; }
+  .doc th, .doc td { border: 1px solid #e2e8f0; padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  .doc th { background: #f8fafc; font-weight: 600; color: #0f172a; }
+  .doc strong { color: #0f172a; }
+</style>
+{% endblock %}

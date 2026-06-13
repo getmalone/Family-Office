@@ -207,6 +207,19 @@ class MonteCarloResult(BaseModel):
     smile_go_go_years: int = 0                      # number of Go-Go years
     smile_slow_go_years: int = 0                    # number of Slow-Go years
 
+    # ── Retirement timeline & Social Security ──────────────────────────────────
+    # All None when ages aren't supplied (the simulation stays purely year-based).
+    current_age: int | None = None                  # household planning age today
+    retirement_age: int | None = None               # age accumulation ends / withdrawals begin
+    ssa_claiming_age: int | None = None             # age Social Security benefits start (62–70)
+    ssa_monthly_benefit: Decimal | None = None      # claiming-age-adjusted benefit, $/month
+    ssa_annual_benefit: Decimal | None = None       # claiming-age-adjusted benefit, $/year
+    ssa_fra_factor: float | None = None             # benefit as a fraction of the FRA amount (0.70, 1.24…)
+    ssa_total_benefit: Decimal | None = None        # total SSA income received over the plan horizon
+    bridge_years: int | None = None                 # retirement years before SSA (portfolio funds 100%)
+    # Annual portfolio draw once SSA is flowing (median): spending need − SSA, floored at 0.
+    net_draw_after_ssa: Decimal | None = None
+
 
 class MonteCarloComparison(BaseModel):
     current: MonteCarloResult

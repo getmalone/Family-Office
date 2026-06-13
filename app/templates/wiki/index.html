@@ -272,6 +272,7 @@
     <a href="#s16"><span class="num">16</span><span class="emoji">🔄</span> Data Flows</a>
     <a href="#s17"><span class="num">17</span><span class="emoji">🛠️</span> Scripts &amp; Utilities</a>
     <a href="#s18"><span class="num">18</span><span class="emoji">🔐</span> Security</a>
+    <a href="#s19"><span class="num">19</span><span class="emoji">💻</span> Desktop · Web · Offline</a>
   </div>
 </nav>
 
@@ -494,7 +495,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload</code></pre>
       <thead><tr><th>Setting</th><th>Env Var</th><th>Default</th><th>Notes</th></tr></thead>
       <tbody>
         <tr><td class="mono">db_path</td><td><code>KFO_DB_PATH</code></td><td><code>data/family_office.db</code></td><td>Relative to project root</td></tr>
-        <tr><td class="mono">db_passphrase</td><td><code>KFO_DB_PASSPHRASE</code></td><td><em>dev-only string</em></td><td>For optional SQLCipher encryption</td></tr>
+        <tr><td class="mono">db_passphrase</td><td><code>KFO_DB_PASSPHRASE</code></td><td><code>""</code></td><td>When set, the database is opened through <strong>SQLCipher</strong> (AES-256 at rest). Empty = plaintext. See §19.</td></tr>
         <tr><td class="mono">anthropic_api_key</td><td><code>KFO_ANTHROPIC_API_KEY</code></td><td><code>""</code></td><td>Required for AI features</td></tr>
         <tr><td class="mono">openai_api_key</td><td><code>KFO_OPENAI_API_KEY</code></td><td><code>""</code></td><td>Fallback LLM if Anthropic absent</td></tr>
         <tr><td class="mono">llm_provider</td><td><code>KFO_LLM_PROVIDER</code></td><td><code>anthropic</code></td><td></td></tr>
@@ -502,9 +503,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload</code></pre>
         <tr><td class="mono">market_data_cache_ttl_minutes</td><td><code>KFO_MARKET_DATA_CACHE_TTL_MINUTES</code></td><td><code>15</code></td><td>Price cache age before re-fetch</td></tr>
         <tr><td class="mono">trade_approval_threshold</td><td><code>KFO_TRADE_APPROVAL_THRESHOLD</code></td><td><code>50000</code></td><td>Dollar amount above which trades need approval</td></tr>
         <tr><td class="mono">gift_approval_threshold</td><td><code>KFO_GIFT_APPROVAL_THRESHOLD</code></td><td><code>18000</code></td><td>Annual exclusion trigger (2026 IRS limit)</td></tr>
-        <tr><td class="mono">host</td><td><code>KFO_HOST</code></td><td><code>127.0.0.1</code></td><td>Always bind to loopback</td></tr>
-        <tr><td class="mono">port</td><td><code>KFO_PORT</code></td><td><code>8000</code></td><td>Team uses 8001 to avoid conflicts</td></tr>
+        <tr><td class="mono">host</td><td><code>KFO_HOST</code></td><td><code>127.0.0.1</code></td><td>Loopback by default; set <code>0.0.0.0</code> to reach the app from other devices (set an access code first). See §19.</td></tr>
+        <tr><td class="mono">port</td><td><code>KFO_PORT</code></td><td><code>8000</code></td><td>Desktop launcher auto-picks a free port if this is taken</td></tr>
         <tr><td class="mono">field_encryption_key</td><td><code>KFO_FIELD_ENCRYPTION_KEY</code></td><td><code>""</code></td><td>AES key for SSN/account number columns</td></tr>
+        <tr><td class="mono">access_code</td><td><code>KFO_ACCESS_CODE</code></td><td><code>""</code></td><td>Empty = open (local-first). Set to require sign-in at <code>/login</code> on every request — used when exposed on a network.</td></tr>
+        <tr><td class="mono">master_password</td><td><code>KFO_MASTER_PASSWORD</code></td><td><code>""</code></td><td>Set by the desktop launcher. Fills <code>db_passphrase</code> (always) and <code>access_code</code> (only when host is <code>0.0.0.0</code>). One secret, both jobs.</td></tr>
+        <tr><td class="mono">session_max_age_days</td><td><code>KFO_SESSION_MAX_AGE_DAYS</code></td><td><code>30</code></td><td>Lifetime of a <code>/login</code> session cookie</td></tr>
       </tbody>
     </table>
   </div>
@@ -1127,6 +1131,19 @@ for y in range(withdrawal_years):
     port_d = maximum(port_d * dist_gf[:, y] - annual_wdraw, 0.0)</code></pre>
   <p><strong>Survival rate</strong> = fraction of simulations where portfolio &gt; 0 at end of distribution phase. Color-coded: ≥90% green (highly sustainable), ≥70% amber (moderate risk), &lt;70% red (high ruin probability).</p>
 
+  <h4>Retirement Timeline &amp; Social Security</h4>
+  <p>Optional age inputs make the projection age-aware. <code>current_age</code> + <code>retirement_age</code> drive the accumulation length (years = retirement − current). <code>ssa_claiming_age</code> (62–70) and <code>ssa_monthly_fra</code> (estimated benefit at Full Retirement Age 67) add Social Security as an <strong>income offset</strong> in the distribution phase.</p>
+  <p>The FRA estimate is adjusted for the claiming age via standard SSA rules (<code>_ssa_claiming_factor</code>): 62 ≈ 70%, 67 = 100%, 70 ≈ 124%. Each retirement year the smile-adjusted spending need is met by SSA <em>first</em>, and the portfolio draws only the remainder — so the pre-SSA years (the <strong>bridge</strong>) are funded 100% by the portfolio:</p>
+  <pre><code>ssa_per_year[y] = ssa_annual  if  retirement_age + y >= ssa_claiming_age  else 0
+spending_need   = annual_wdraw * smile_mults[y]
+portfolio_draw  = maximum(spending_need - ssa_per_year[y], 0.0)
+port_d = maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)</code></pre>
+  <p>The model is nominal (no COLA / inflation indexing, consistent with the flat-withdrawal design). Adding SSA raises the survival rate and shortens portfolio drawdown. Result fields: <code>ssa_claiming_age</code>, <code>ssa_monthly_benefit</code> / <code>ssa_annual_benefit</code> (claiming-adjusted), <code>ssa_fra_factor</code>, <code>ssa_total_benefit</code>, <code>bridge_years</code>, <code>net_draw_after_ssa</code>. The chart labels the x-axis by age and marks the SSA start year. Inputs flow via <code>/analysis/monte-carlo</code> query params.</p>
+  <div class="callout callout-warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body"><p><strong>Not yet modeled:</strong> per-account-type buckets (taxable / traditional / Roth) and withdrawal <em>sequencing</em>, taxes, Rule of 55, 72(t), Roth conversions, ACA/MAGI. SSA offsets the total draw but the engine is still a single pooled portfolio — this is the larger "Income Bridge Planner" roadmap item.</p></div>
+  </div>
+
   <h4>Chart — Retirement Anchor &amp; Phase Boundary</h4>
   <p>The Chart.js fan chart shows two colored fans joined at the retirement year. The first point of the distribution (orange) fan is the retirement <em>starting value</em> — the exact same value as the last accumulation (blue) fan point. This anchors both fans at the same pixel and makes the slope change (contributions stop + withdrawals begin) visually obvious as a kink at the "Retirement" dashed divider line.</p>
   <p>Each simulation's distribution phase starts from its <em>own</em> accumulation ending value — lower-outcome simulations carry their lower starting point all the way through distribution, so the P10 / median / P90 bands remain causally linked across phases (78% cross-percentile continuity at the first distribution year).</p>
@@ -1456,9 +1473,10 @@ tail -10 /tmp/kfo-server.log</code></pre>
 
   <h3>Network Security</h3>
   <ul>
-    <li><strong>Loopback-only:</strong> Server always binds to <code>127.0.0.1</code>. No external network exposure by design.</li>
-    <li><strong>No authentication layer:</strong> Single-user local system. Trust is provided by OS-level access control to the machine.</li>
-    <li><strong>API keys in .env:</strong> Never committed to source control. The <code>.gitignore</code> excludes <code>.env</code> (but not <code>.env.example</code>).</li>
+    <li><strong>Loopback by default:</strong> Binds to <code>127.0.0.1</code>. Can be exposed on a LAN with <code>KFO_HOST=0.0.0.0</code> (e.g. for phone/tablet access) — see §19.</li>
+    <li><strong>Optional access gate:</strong> An <code>AccessCodeMiddleware</code> (<code>app/web.py</code>) requires a shared passcode at <code>/login</code> when <code>access_code</code> is set; it auto-activates from the master password in network mode. Browser navigations redirect to <code>/login</code>; HTMX/API calls get a 401. The PWA shell (service worker, manifest, offline, help, health) stays open so the app can boot offline.</li>
+    <li><strong>Stateless sessions:</strong> The session cookie is an HMAC of a constant message keyed by the access code — rotating the code invalidates all sessions; no server-side store.</li>
+    <li><strong>API keys in .env:</strong> Never committed. The <code>.gitignore</code> excludes <code>.env</code>, <code>data/</code>, <code>private/</code>, and <code>*.db</code>; the release build aborts if any slip into a bundle.</li>
   </ul>
 
   <h3>Field-Level Encryption (Partial Implementation)</h3>
@@ -1475,7 +1493,7 @@ tail -10 /tmp/kfo-server.log</code></pre>
   <ul>
     <li><strong>WAL mode:</strong> Allows concurrent reads without blocking writes; safer for multi-process access.</li>
     <li><strong>Foreign key enforcement:</strong> <code>PRAGMA foreign_keys=ON</code> — all FK constraints are checked at insert/update.</li>
-    <li><strong>SQLCipher:</strong> Full-disk encryption is structurally supported via the <code>db_passphrase</code> setting but not active in the default <code>db_url</code> property. The <code>cryptography</code> library is installed and ready.</li>
+    <li><strong>SQLCipher (active):</strong> When <code>db_passphrase</code> (or the launcher's master password) is set, the engine opens the file through <code>sqlcipher3</code> with <code>PRAGMA key</code> as the first statement — transparent AES-256 encryption at rest. Empty passphrase = plaintext (backward compatible). Convert/inspect with <code>scripts/db_admin.py</code> (create / encrypt / decrypt). See §19.</li>
   </ul>
 
   <h3>Known Limitations &amp; Roadmap Items</h3>
@@ -1484,7 +1502,8 @@ tail -10 /tmp/kfo-server.log</code></pre>
     <tbody>
       <tr><td>LangGraph resume after approval</td><td class="gold">Column exists; agent-side not wired</td><td>Wire <code>langgraph_thread_id</code> → graph resume via SSE stream</td></tr>
       <tr><td>Field encryption</td><td class="gold">Columns exist; property wrappers absent</td><td>Add <code>@hybrid_property</code> encrypt/decrypt on affected models</td></tr>
-      <tr><td>Authentication</td><td class="red">None</td><td>Add FastAPI session auth (passphrase or OAuth) for multi-user or remote use</td></tr>
+      <tr><td>Authentication</td><td class="green">Shared-passcode gate (done)</td><td>Optional per-user accounts / OAuth for multi-user setups</td></tr>
+      <tr><td>At-rest encryption</td><td class="green">SQLCipher active (done)</td><td>Field-level wrappers for SSN/account-number columns still pending</td></tr>
       <tr><td>Test coverage</td><td class="gold">Service layer only; API, model, agent tests are stubs</td><td>Add <code>TestClient</code> fixtures for API layer; mock LangGraph for agent tests</td></tr>
       <tr><td>SoftDeleteMixin</td><td class="gold">Defined but inconsistently applied</td><td>Standardize: all models use mixin or explicit <code>is_active</code></td></tr>
       <tr><td>CTRA price</td><td class="red">Not found by yfinance (possibly delisted)</td><td>Manual update from Yahoo Finance; or mark <code>is_publicly_traded=False</code></td></tr>
@@ -1492,8 +1511,51 @@ tail -10 /tmp/kfo-server.log</code></pre>
   </table></div>
 </section>
 
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 19 DESKTOP · WEB · OFFLINE -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section class="section" id="s19">
+  <div class="section-header">
+    <span class="sec-num">19</span>
+    <span class="sec-emoji">💻</span>
+    <h2>Desktop App · Web · Offline</h2>
+  </div>
+
+  <p>The app installs and runs on an end user's laptop with no developer tooling, works as an installable offline web app, and stores data encrypted at rest. The full end-user guide is <strong>USAGE.md</strong>, rendered in-app at <code>/help</code> (reachable from the <strong>?</strong> icon in the nav).</p>
+
+  <h3>Progressive Web App (offline)</h3>
+  <ul>
+    <li><strong>Vendored front-end:</strong> Tailwind, HTMX, and Chart.js are served from <code>static/vendor/</code> — no CDN, so the UI renders with no internet.</li>
+    <li><strong>Service worker</strong> (<code>/service-worker.js</code>, root scope): precaches the app shell, then serves navigations network-first with a cached fallback and a friendly <code>/offline</code> page. Static assets use stale-while-revalidate; <code>/agent</code> and <code>/health</code> are network-only.</li>
+    <li><strong>Manifest</strong> (<code>/manifest.webmanifest</code>) + icon make it installable ("Add to Home Screen"). An <strong>Offline</strong> badge appears in the nav and the app auto-reloads when the connection returns.</li>
+  </ul>
+
+  <h3>Desktop launchers &amp; runtime bootstrap</h3>
+  <p>Per-OS double-click launchers in <code>launchers/</code> — <code>family-office-macos.command</code>, <code>family-office-linux.sh</code>, <code>family-office-windows.bat</code>. Each installs <code>uv</code> if missing, runs <code>uv sync --frozen</code> (exact versions from <code>uv.lock</code>, wheels-only — no compiler), then runs <code>launchers/_run.py</code>, which prompts for the master password, opens/creates the encrypted DB, picks a free port, and opens the browser.</p>
+  <div class="callout">
+    <span class="callout-icon">📌</span>
+    <div class="callout-body"><p><code>cryptography</code> is pinned <code>&lt;49</code>: v49 dropped x86_64 macOS wheels (arm64-only), which would force a from-source build on Intel Macs. All native deps (cryptography, numpy, pandas, sqlcipher3-wheels) ship wheels for macOS Intel/ARM, Windows, and Linux.</p></div>
+  </div>
+
+  <h3>Master password &amp; encryption</h3>
+  <p>One password (entered at launch) does two jobs via a <code>Settings</code> validator: it always fills <code>db_passphrase</code> (SQLCipher AES-256 at rest — SQLCipher runs its own PBKDF2 over it), and it fills <code>access_code</code> only when bound to <code>0.0.0.0</code> (so localhost gets a single prompt, network mode adds the <code>/login</code> gate). First run creates a fresh encrypted database; a wrong password fails the pre-flight with a clear message. See §18.</p>
+
+  <h3>Settings page (<code>/settings</code>)</h3>
+  <ul>
+    <li><strong>AI key &amp; model:</strong> stored in the encrypted DB (<code>AppSetting</code> table) and loaded into the live config at startup — no <code>.env</code> editing. Env vars still win if set.</li>
+    <li><strong>Backup:</strong> checkpoints the WAL and downloads a timestamped copy of the encrypted database.</li>
+    <li><strong>Import:</strong> bulk-load opening positions (see below).</li>
+  </ul>
+
+  <h3>Data ingestion — CSV · JSON · XML</h3>
+  <p><code>app/services/import_service.py</code> auto-detects the format (extension or content sniff) and imports accounts, securities, and opening tax lots. Shared field names across formats; only <code>account</code> and <code>quantity</code> are required. JSON/XML support flat lists and nested <code>accounts → positions</code>; XML rejects DTD/entity definitions (XXE / billion-laughs guard). Positions are recorded as opening balances (acquisition <code>Transaction</code> + <code>TaxLot</code>), not as trades.</p>
+
+  <h3>Building a release</h3>
+  <p><code>scripts/build_release.py</code> assembles <code>dist/family-office-&lt;version&gt;/</code> + a <code>.zip</code> with the app, launchers, lockfile, <code>INSTALL.md</code> and <code>USAGE.md</code> — and <strong>hard-fails if <code>.env</code>, <code>data/</code>, <code>private/</code>, or any <code>*.db</code> is present</strong>. Distribution + code-signing/notarization notes live in <strong>DISTRIBUTION.md</strong>.</p>
+</section>
+
 <hr class="div">
-<p style="font-size:0.75rem; color:#4a5568; text-align:center;">Family Office Wiki · v0.1.0 · Generated 2026-05-21 · <a href="/">← Back to Dashboard</a></p>
+<p style="font-size:0.75rem; color:#4a5568; text-align:center;">Family Office Wiki · v0.1.0 · Updated 2026-06-13 · <a href="/">← Back to Dashboard</a></p>
 
 </main>
 

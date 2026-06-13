@@ -824,6 +824,10 @@ class AnalysisService:
         spending_pattern: str = "constant",  # "constant" | "smile"
         smile_slow_pct: float = 80.0,
         smile_no_pct: float = 65.0,
+        current_age: int | None = None,
+        retirement_age: int | None = None,
+        ssa_claiming_age: int | None = None,
+        ssa_monthly_fra: Decimal = Decimal("0"),  # est. monthly benefit at Full Retirement Age (67)
     ) -> MonteCarloComparison:
         """
         Run Monte Carlo simulation for current allocation and optionally target.
@@ -883,6 +887,31 @@ class AnalysisService:
         withdrawal_rate_float  = float(withdrawal_rate)
         withdrawal_years_int   = int(withdrawal_years)
 
+        # ── Retirement timeline & Social Security ─────────────────────────────
+        # When current + retirement ages are supplied, they drive the
+        # accumulation length (years to retirement). Ages are the friendly
+        # overlay; the engine still thinks in "years from today".
+        if current_age is not None and retirement_age is not None:
+            years = max(0, int(retirement_age) - int(current_age))
+
+        # Convert the FRA benefit estimate into a claiming-age-adjusted figure.
+        # SSA only participates when we know *when* it starts (both ages) and how
+        # much (a positive benefit). Otherwise it's disabled and the model is
+        # identical to before.
+        ssa_annual_float = 0.0
+        ssa_fra_factor: float | None = None
+        if (
+            ssa_monthly_fra and float(ssa_monthly_fra) > 0
+            and ssa_claiming_age is not None
+            and retirement_age is not None
+        ):
+            ssa_fra_factor = self._ssa_claiming_factor(int(ssa_claiming_age))
+            ssa_annual_float = float(ssa_monthly_fra) * 12.0 * ssa_fra_factor
+
+        ca = int(current_age) if current_age is not None else None
+        ra = int(retirement_age) if retirement_age is not None else None
+        sca = int(ssa_claiming_age) if ssa_claiming_age is not None else None
+
         # Run simulation for current allocation
         current_result = self._simulate(
             label="Current Allocation",
@@ -898,6 +927,11 @@ class AnalysisService:
             spending_pattern=spending_pattern,
             smile_slow_pct=smile_slow_pct,
             smile_no_pct=smile_no_pct,
+            current_age=ca,
+            retirement_age=ra,
+            ssa_claiming_age=sca,
+            ssa_annual_benefit=ssa_annual_float,
+            ssa_fra_factor=ssa_fra_factor,
         )
 
         # Run simulation for target allocation if profile is active
@@ -920,6 +954,11 @@ class AnalysisService:
                     spending_pattern=spending_pattern,
                     smile_slow_pct=smile_slow_pct,
                     smile_no_pct=smile_no_pct,
+                    current_age=ca,
+                    retirement_age=ra,
+                    ssa_claiming_age=sca,
+                    ssa_annual_benefit=ssa_annual_float,
+                    ssa_fra_factor=ssa_fra_factor,
                 )
 
         # ── Comparison A / B simulations (user-selected profiles) ────────────
@@ -941,6 +980,11 @@ class AnalysisService:
                 spending_pattern=spending_pattern,
                 smile_slow_pct=smile_slow_pct,
                 smile_no_pct=smile_no_pct,
+                current_age=ca,
+                retirement_age=ra,
+                ssa_claiming_age=sca,
+                ssa_annual_benefit=ssa_annual_float,
+                ssa_fra_factor=ssa_fra_factor,
             )
 
         profile_a, profile_b = self.get_comparison_profiles()
@@ -954,6 +998,31 @@ class AnalysisService:
             comparison_b=comparison_b_result,
             goal_amount=goal_amount,
         )
+
+    @staticmethod
+    def _ssa_claiming_factor(claiming_age: int, fra: int = 67) -> float:
+        """Benefit as a fraction of the Full-Retirement-Age (FRA) amount.
+
+        Applies the standard Social Security rules (FRA = 67 for those born 1960+):
+          • Claim early (before FRA): permanent reduction of 5/9 of 1% per month
+            for the first 36 months, then 5/12 of 1% per month beyond that.
+            → age 62 yields 70% of the FRA benefit.
+          • Claim late (after FRA): delayed-retirement credits of 8%/year up to
+            age 70. → age 70 yields 124% of the FRA benefit.
+        Claiming age is clamped to the valid [62, 70] window.
+        """
+        age = max(62, min(70, int(claiming_age)))
+        if age == fra:
+            return 1.0
+        if age < fra:
+            early_months = (fra - age) * 12
+            first36 = min(early_months, 36)
+            beyond = max(early_months - 36, 0)
+            reduction = first36 * (5.0 / 9.0 / 100.0) + beyond * (5.0 / 12.0 / 100.0)
+            return round(1.0 - reduction, 6)
+        # Delayed credits accrue only through age 70.
+        delayed_years = min(age, 70) - fra
+        return round(1.0 + delayed_years * 0.08, 6)
 
     def _simulate(
         self,
@@ -970,6 +1039,11 @@ class AnalysisService:
         spending_pattern: str = "constant",
         smile_slow_pct: float = 80.0,
         smile_no_pct: float = 65.0,
+        current_age: int | None = None,
+        retirement_age: int | None = None,
+        ssa_claiming_age: int | None = None,
+        ssa_annual_benefit: float = 0.0,   # claiming-age-adjusted SSA, $/year
+        ssa_fra_factor: float | None = None,
     ) -> MonteCarloResult:
         """
         Two-phase Monte Carlo: accumulation → distribution.
@@ -1101,6 +1175,11 @@ class AnalysisService:
         portfolio_survival_rate  = None
         go_go_yrs   = 0
         slow_go_yrs = 0
+        ssa_annual_out: Decimal | None = None
+        ssa_monthly_out: Decimal | None = None
+        ssa_total_out: Decimal | None = None
+        bridge_years_out: int | None = None
+        net_draw_after_ssa_out: Decimal | None = None
 
         if withdrawal_rate > 0 and withdrawal_years > 0:
             # Per-simulation annual withdrawal: constant dollar amount based on
@@ -1133,12 +1212,28 @@ class AnalysisService:
                                        size=(num_simulations, withdrawal_years))
             dist_gf = np.exp(dist_log_rets)
 
+            # ── Social Security income offset ──────────────────────────────────
+            # Before the claiming age the portfolio funds 100% of spending (the
+            # "income bridge"); from the claiming age on, SSA covers part of each
+            # year's need and the portfolio only draws the remaining gap.
+            ssa_per_year = np.zeros(withdrawal_years)
+            if (
+                ssa_annual_benefit > 0
+                and retirement_age is not None
+                and ssa_claiming_age is not None
+            ):
+                for y in range(withdrawal_years):
+                    if retirement_age + y >= ssa_claiming_age:
+                        ssa_per_year[y] = ssa_annual_benefit
+
             port_d = final_vals.copy()
             dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
             for y in range(withdrawal_years):
-                # End-of-year: portfolio grows first, then withdraw smile-adjusted amount
-                effective_wdraw = annual_wdraw * smile_mults[y]
-                port_d = np.maximum(port_d * dist_gf[:, y] - effective_wdraw, 0.0)
+                # End-of-year: portfolio grows first; the smile-adjusted spending
+                # need is met from SSA first, then the portfolio covers the rest.
+                spending_need  = annual_wdraw * smile_mults[y]                  # per-sim ($)
+                portfolio_draw = np.maximum(spending_need - ssa_per_year[y], 0.0)
+                port_d = np.maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)
                 dist_values[:, y] = port_d
 
             # First point: retirement starting value = end of accumulation.
@@ -1172,6 +1267,18 @@ class AnalysisService:
             # Total withdrawn = Go-Go rate × sum of smile multipliers
             # (accounts for step-downs in Slow-Go and No-Go phases)
             total_distributed = med_wdraw * float(np.sum(smile_mults))
+
+            # ── Social Security summary (deterministic across sims) ────────────
+            if ssa_annual_benefit > 0 and ssa_per_year.any():
+                ssa_annual_out  = Decimal(str(round(ssa_annual_benefit, 2)))
+                ssa_monthly_out = Decimal(str(round(ssa_annual_benefit / 12.0, 2)))
+                ssa_total_out   = Decimal(str(round(float(np.sum(ssa_per_year)), 2)))
+                if retirement_age is not None and ssa_claiming_age is not None:
+                    bridge_years_out = max(0, min(withdrawal_years,
+                                                  ssa_claiming_age - retirement_age))
+                # Portfolio's own Go-Go-level draw once SSA is flowing.
+                net_draw_after_ssa_out = Decimal(str(round(
+                    max(med_wdraw - ssa_annual_benefit, 0.0), 2)))
 
             withdrawal_annual_amount = Decimal(str(round(med_wdraw, 2)))
             withdrawal_total         = Decimal(str(round(total_distributed, 2)))
@@ -1207,6 +1314,15 @@ class AnalysisService:
             smile_no_pct=smile_no_pct if spending_pattern == "smile" else None,
             smile_go_go_years=go_go_yrs,
             smile_slow_go_years=slow_go_yrs,
+            current_age=current_age,
+            retirement_age=retirement_age,
+            ssa_claiming_age=ssa_claiming_age if ssa_annual_out is not None else None,
+            ssa_monthly_benefit=ssa_monthly_out,
+            ssa_annual_benefit=ssa_annual_out,
+            ssa_fra_factor=ssa_fra_factor if ssa_annual_out is not None else None,
+            ssa_total_benefit=ssa_total_out,
+            bridge_years=bridge_years_out,
+            net_draw_after_ssa=net_draw_after_ssa_out,
         )
 
     # ── Correlation Matrix ───────────────────────────────────────────────
