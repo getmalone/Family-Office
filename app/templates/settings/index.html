@@ -11,6 +11,17 @@
   <div class="rounded-lg bg-red-50 border border-red-200 text-red-800 px-4 py-3 text-sm">{{ err }}</div>
   {% endif %}
 
+  {# ── App version & updates ── #}
+  <div class="bg-white shadow rounded-lg p-6">
+    <h3 class="font-medium text-gray-900 mb-1">App version &amp; updates</h3>
+    <p class="text-sm text-gray-500 mb-3">You're running <span class="font-semibold text-gray-700">v{{ version }}</span>.</p>
+    <div class="flex items-center gap-3">
+      <button id="check-updates-btn" type="button" onclick="checkUpdates()"
+              class="bg-slate-700 text-white rounded-md px-5 py-2 text-sm hover:bg-slate-800">Check for updates</button>
+      <span id="update-result" class="text-sm text-gray-600"></span>
+    </div>
+  </div>
+
   {# ── AI assistant ── #}
   <div class="bg-white shadow rounded-lg p-6">
     <h3 class="font-medium text-gray-900 mb-1">AI Assistant</h3>
@@ -94,4 +105,28 @@ My Roth IRA,ira_roth,AAPL,Apple Inc.,us_equity,50,8000,2022-06-01,195.20</pre>
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function checkUpdates() {
+  const el = document.getElementById('update-result');
+  const btn = document.getElementById('check-updates-btn');
+  el.textContent = 'Checking…'; btn.disabled = true;
+  try {
+    const d = await (await fetch('/settings/check-updates')).json();
+    if (!d.is_git) {
+      el.textContent = 'Manual updates (not a git install) — current v' + d.current + '.';
+    } else if (d.update_available) {
+      el.innerHTML = '⬆️ Update available: <b>v' + d.current + ' → ' + d.latest +
+        '</b>. Quit and relaunch the app to apply.';
+    } else {
+      el.textContent = '✓ Up to date (v' + d.current + ').';
+    }
+  } catch (e) {
+    el.textContent = 'Could not check for updates (offline?).';
+  }
+  btn.disabled = false;
+}
+</script>
 {% endblock %}

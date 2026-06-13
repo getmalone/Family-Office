@@ -6,13 +6,14 @@ import accounts/positions from CSV — all without touching files on disk.
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
 from app.services import app_settings
 from app.services.import_service import import_positions_data
+from app.version import get_app_version
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -25,11 +26,20 @@ def settings_page(request: Request, db: Session = Depends(get_db), msg: str = ""
         {
             "request": request,
             "values": app_settings.masked_settings(db),
+            "version": get_app_version(),
             "msg": msg,
             "err": err,
             "page_title": "Settings",
         },
     )
+
+
+@router.get("/check-updates")
+def check_updates():
+    """Return current/latest version + whether an update is available (JSON)."""
+    from app.services.updater import get_update_status
+
+    return JSONResponse(get_update_status(fetch=True))
 
 
 @router.post("/")

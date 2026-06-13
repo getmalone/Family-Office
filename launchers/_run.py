@@ -66,6 +66,45 @@ def _wait_then_open(browse_url: str, host: str, port: int) -> None:
         webbrowser.open(browse_url)
 
 
+def _maybe_self_update() -> None:
+    """Offer (and apply) an update from the latest release tag — git installs only.
+
+    Mode via KFO_UPDATE_MODE: 'prompt' (default), 'auto', or 'off'. Offline-safe.
+    On a successful update we re-exec so the new code + dependencies take effect.
+    """
+    if os.environ.get("KFO_UPDATED"):  # already re-execed after applying an update
+        return
+    mode = os.environ.get("KFO_UPDATE_MODE", "prompt").strip().lower()
+    if mode == "off":
+        return
+    try:
+        from app.services.updater import get_update_status, apply_update
+
+        status = get_update_status(fetch=True)
+    except Exception:
+        return
+    if not status.get("update_available"):
+        return
+
+    current, latest = status["current"], status["latest"]
+    print(f"\n⬆️  Update available: {current} → {latest}")
+    if mode == "prompt":
+        try:
+            if input("   Update now? [Y/n] ").strip().lower() in ("n", "no"):
+                print("   Skipped — you can update next time.\n")
+                return
+        except EOFError:
+            return
+    print("   Backing up your data and updating…")
+    ok, msg = apply_update(latest)
+    if not ok:
+        print(f"   ⚠️  Update failed ({msg}). Continuing on {current}.\n")
+        return
+    print(f"   ✅ {msg}. Restarting…\n")
+    os.environ["KFO_UPDATED"] = "1"
+    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
+
+
 def main() -> None:
     os.chdir(ROOT)  # so a relative KFO_DB_PATH resolves under the app folder
 
@@ -78,6 +117,9 @@ def main() -> None:
             print("No password entered — exiting.")
             raise SystemExit(1)
         os.environ["KFO_MASTER_PASSWORD"] = pw
+
+    # ── Check for and (optionally) apply an update before starting ──────────────
+    _maybe_self_update()
 
     # ── Pre-flight: open (or create + encrypt) the database with this password ──
     from app.config import Settings

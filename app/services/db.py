@@ -158,7 +158,14 @@ def init_db(cfg: Settings | None = None) -> tuple[Engine, sessionmaker[Session]]
     global _engine, _session_factory
     if _engine is None:
         _engine = create_db_engine(cfg)
-        create_tables(_engine)
+        # Bring the schema to head via Alembic (creates fresh, stamps existing,
+        # upgrades pending). Fall back to create_all if Alembic is unavailable.
+        try:
+            from app.services.migrations import run_migrations
+
+            run_migrations(_engine, cfg)
+        except Exception:
+            create_tables(_engine)
         _session_factory = get_session_factory(_engine)
     return _engine, _session_factory
 

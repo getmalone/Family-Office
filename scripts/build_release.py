@@ -22,8 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # What goes in the bundle.
-INCLUDE_DIRS = ["app", "static", "launchers"]
-INCLUDE_FILES = ["pyproject.toml", "uv.lock", "README.md", "USAGE.md"]
+INCLUDE_DIRS = ["app", "static", "launchers", "alembic", "scripts"]
+INCLUDE_FILES = ["pyproject.toml", "uv.lock", "README.md", "USAGE.md", "alembic.ini"]
 
 # Launchers + guide copied to the bundle root for an obvious double-click.
 ROOT_LAUNCHERS = [

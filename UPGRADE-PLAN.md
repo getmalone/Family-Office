@@ -70,6 +70,28 @@ git-based self-update · prompt on launch · adopt Alembic for migrations.
 - [ ] Baseline migration; `stamp head` for existing DBs.
 - [ ] Run `upgrade head` on startup; remove `_apply_migrations()`; auto-backup pre-migrate.
 
+## Status — DELIVERED (2026-06-13)
+All three phases are implemented, tested (98 passing), and verified:
+- **Alembic** (`alembic/`, `app/services/migrations.py`): fresh DB → create; existing
+  pre-Alembic DB → `stamp head` (no DDL); pending → `upgrade head`; **auto-backup
+  before applying**; SQLCipher-aware via `env.py`. Wired into `init_db`.
+- **Versioning** (`app/version.py`, sourced from pyproject) shown in Settings,
+  with a **Check for updates** button (`GET /settings/check-updates`).
+- **Self-update** (`app/services/updater.py` + `launchers/_run.py`): on launch a
+  git install fetches, and if a newer `vX.Y.Z` tag exists it prompts, backs up,
+  `git checkout`s, `uv sync`s, and re-execs. Offline-safe; `KFO_UPDATE_MODE`
+  = prompt (default) | auto | off. Plus `scripts/update.sh` for manual updates.
+
+### Git-based install (enables self-update)
+One-time, then every launch self-updates:
+```bash
+gh auth login                                                  # once, device-code flow
+git clone https://github.com/getmalone/Family-Office.git family-office
+cd family-office && ./launchers/family-office-macos.command    # (or -windows.bat / -linux.sh)
+```
+Zip installs still work — they get the auto-migrations + pre-upgrade backup, but
+update manually (re-download); convert to a git clone to get self-update.
+
 ## Risks / edge cases
 - Private-repo auth per machine (one-time `gh auth login`).
 - Alembic must use the keyed engine for encrypted DBs; baseline must match reality.
