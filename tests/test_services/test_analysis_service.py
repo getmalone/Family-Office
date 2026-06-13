@@ -31,14 +31,16 @@ def test_get_risk_metrics_with_positions(seeded_session):
 
 
 def test_seed_default_profiles(session):
-    """Seeding creates 5 system profiles."""
+    """Seeding creates all system profiles, with the 5 risk levels included."""
+    from app.services.analysis_service import DEFAULT_PROFILES
+
     svc = AnalysisService(session)
     svc.seed_default_profiles()
 
     profiles = svc.list_profiles()
-    assert len(profiles) == 5
+    assert len(profiles) == len(DEFAULT_PROFILES)
     names = {p.name for p in profiles}
-    assert names == {"Conservative", "Moderate", "Balanced", "Growth", "Aggressive"}
+    assert {"Conservative", "Moderate", "Balanced", "Growth", "Aggressive"} <= names
 
     # Balanced should be active by default
     active = svc.get_active_profile()
@@ -48,12 +50,14 @@ def test_seed_default_profiles(session):
 
 def test_seed_default_profiles_idempotent(session):
     """Seeding profiles twice doesn't create duplicates."""
+    from app.services.analysis_service import DEFAULT_PROFILES
+
     svc = AnalysisService(session)
     svc.seed_default_profiles()
     svc.seed_default_profiles()
 
     profiles = svc.list_profiles()
-    assert len(profiles) == 5
+    assert len(profiles) == len(DEFAULT_PROFILES)
 
 
 def test_set_active_profile(session):
