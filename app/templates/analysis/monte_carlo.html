@@ -173,6 +173,60 @@
       </div>
     </div>
 
+    <!-- Max sustainable spending (follow-on solver) -->
+    <div class="bg-white shadow rounded-lg p-6">
+      <div class="flex flex-wrap items-end justify-between gap-4">
+        <div class="max-w-xl">
+          <h3 class="font-medium text-gray-900">Max sustainable spending</h3>
+          <p class="text-sm text-gray-500 mt-0.5">The highest spending that keeps the portfolio's
+            survival rate at your target — using the scenario above (ages, Social Security,
+            contributions, distribution years, spending pattern).</p>
+        </div>
+        <div class="flex items-end gap-3">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Target survival (%)</label>
+            <input type="number" id="ms-target" value="85" min="1" max="99" step="1"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-28">
+          </div>
+          <button type="button" onclick="solveMaxSpending()"
+                  class="bg-indigo-600 text-white rounded-md px-5 py-2 text-sm hover:bg-indigo-700">Calculate</button>
+        </div>
+      </div>
+      <div id="ms-result" class="mt-4 text-sm"></div>
+    </div>
+
+    <script>
+    async function solveMaxSpending() {
+      const f = document.getElementById('mc-form');
+      const out = document.getElementById('ms-result');
+      const g = (n) => { const el = f.elements[n]; return el && el.value.trim() ? el.value.trim() : ''; };
+      const p = new URLSearchParams();
+      p.set('target', document.getElementById('ms-target').value || '85');
+      p.set('simulations', g('simulations') || '2000');
+      p.set('withdrawal_years', g('withdrawal_years') || '30');
+      p.set('spending_pattern', g('spending_pattern') || 'constant');
+      ['smile_slow_pct','smile_no_pct','monthly_contribution','regime_override',
+       'years','current_age','retirement_age','ssa_claiming_age','ssa_monthly'].forEach(n => {
+        if (g(n)) p.set(n, g(n));
+      });
+      out.innerHTML = 'Calculating…';
+      try {
+        const d = await (await fetch('/analysis/api/max-spending?' + p.toString())).json();
+        const fmt = (x) => '$' + Number(x).toLocaleString(undefined, {maximumFractionDigits: 0});
+        out.innerHTML =
+          '<div class="rounded-lg bg-indigo-50 border border-indigo-200 p-4">' +
+          '<div class="text-gray-700">For <b>' + d.target_survival + '% survival</b>, the highest sustainable spending is:</div>' +
+          '<div class="mt-1 text-2xl font-bold text-indigo-700"><span class="bal">' + fmt(d.annual_amount) + '</span>/yr ' +
+          '<span class="text-base font-medium text-gray-500">(<span class="bal">' + fmt(d.monthly_amount) + '</span>/mo)</span></div>' +
+          '<div class="text-xs text-gray-500 mt-1">≈ ' + d.max_withdrawal_rate + '% withdrawal rate · achieved survival ' + d.achieved_survival + '%' +
+          (Number(d.ssa_annual_benefit) ? ' · plus Social Security ' + fmt(d.ssa_annual_benefit) + '/yr' : '') + '</div>' +
+          '</div>';
+      } catch (e) {
+        out.innerHTML = '<span class="text-red-600">Could not calculate — please try again.</span>';
+      }
+    }
+    </script>
+
     {# ── helper macro: one result card (accent: blue | green | red) ── #}
     {% macro result_card(r, accent='blue') %}
     {% if accent == 'green' %}

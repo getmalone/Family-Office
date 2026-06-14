@@ -221,6 +221,17 @@ class MonteCarloResult(BaseModel):
     net_draw_after_ssa: Decimal | None = None
 
 
+class MaxSpendingResult(BaseModel):
+    """Highest sustainable spending for a target portfolio survival rate."""
+    target_survival: Decimal                 # e.g. 85 (%)
+    max_withdrawal_rate: Decimal             # % of retirement-date portfolio
+    annual_amount: Decimal                   # median Go-Go annual spend at that rate
+    monthly_amount: Decimal
+    achieved_survival: Decimal               # survival at the solved rate (≈ target)
+    ssa_annual_benefit: Decimal | None = None
+    withdrawal_years: int = 0
+
+
 class MonteCarloComparison(BaseModel):
     current: MonteCarloResult
     target: MonteCarloResult | None = None

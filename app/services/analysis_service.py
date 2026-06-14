@@ -879,6 +879,122 @@ class AnalysisService:
 
     # ── Monte Carlo Simulation ──────────────────────────────────────────
 
+    def _resolve_portfolio_regime(self, summary, initial_value, regime_override):
+        """Manual override → synthetic regime; else auto Markov (never blocks)."""
+        if regime_override and regime_override.lower() != "base":
+            from app.schemas.analysis import RegimeTransition
+            _rt = RegimeTransition(bull=0.0, sideways=0.0, bear=0.0)
+            return RegimeState(
+                symbol="Manual Override", current_regime=regime_override.capitalize(),
+                persist_pct=0.0, one_step=_rt, five_step=_rt, stationary=_rt,
+                signal_score=0.0, lookback_days=0,
+            )
+        if not regime_override:
+            try:
+                from app.services.markov_regime_service import MarkovRegimeService
+                symbols = [h.symbol for h in summary.holdings if h.symbol]
+                weights = {
+                    h.symbol: float(h.market_value) / initial_value
+                    for h in summary.holdings
+                    if h.symbol and float(h.market_value) > 0
+                }
+                if symbols:
+                    regime, _ = MarkovRegimeService().get_portfolio_and_ticker_regimes(
+                        symbols=symbols, weights=weights
+                    )
+                    return regime
+            except Exception:
+                pass
+        return None  # "base" or detection unavailable → no conditioning
+
+    def solve_max_spending(
+        self,
+        *,
+        years: int = 10,
+        num_simulations: int = 2000,
+        monthly_contribution: Decimal = Decimal("0"),
+        withdrawal_years: int = 30,
+        regime_override: str | None = None,
+        spending_pattern: str = "constant",
+        smile_slow_pct: float = 80.0,
+        smile_no_pct: float = 65.0,
+        current_age: int | None = None,
+        retirement_age: int | None = None,
+        ssa_claiming_age: int | None = None,
+        ssa_monthly_fra: Decimal = Decimal("0"),
+        target_survival: float = 85.0,
+        max_rate: float = 20.0,
+    ) -> "MaxSpendingResult":
+        """Find the highest withdrawal rate keeping portfolio survival ≥ target.
+
+        Survival is monotonically decreasing in the withdrawal rate, so we binary-
+        search the rate (reusing the same simulation engine, regime, and SSA/age
+        scenario as the displayed run) for the crossing point.
+        """
+        from app.schemas.analysis import MaxSpendingResult
+
+        summary = self.portfolio_svc.get_summary()
+        initial_value = float(summary.total_market_value) or 1.0
+        regime = self._resolve_portfolio_regime(summary, initial_value, regime_override)
+        current_alloc = {k: float(v) / 100 for k, v in summary.allocation.items()}
+
+        if current_age is not None and retirement_age is not None:
+            years = max(0, int(retirement_age) - int(current_age))
+
+        ssa_annual = 0.0
+        ssa_factor: float | None = None
+        if (ssa_monthly_fra and float(ssa_monthly_fra) > 0
+                and ssa_claiming_age is not None and retirement_age is not None):
+            ssa_factor = self._ssa_claiming_factor(int(ssa_claiming_age))
+            ssa_annual = float(ssa_monthly_fra) * 12.0 * ssa_factor
+
+        wy = int(withdrawal_years)
+        ca = int(current_age) if current_age is not None else None
+        ra = int(retirement_age) if retirement_age is not None else None
+        sca = int(ssa_claiming_age) if ssa_claiming_age is not None else None
+        target = float(target_survival)
+
+        def _sim_at(rate: float):
+            return self._simulate(
+                label="solve", allocation=current_alloc, initial_value=initial_value,
+                years=years, num_simulations=num_simulations, goal_amount=None,
+                regime=regime, monthly_contribution=float(monthly_contribution),
+                withdrawal_rate=rate, withdrawal_years=wy,
+                spending_pattern=spending_pattern,
+                smile_slow_pct=smile_slow_pct, smile_no_pct=smile_no_pct,
+                current_age=ca, retirement_age=ra, ssa_claiming_age=sca,
+                ssa_annual_benefit=ssa_annual, ssa_fra_factor=ssa_factor,
+            )
+
+        def _survival(rate: float) -> float:
+            r = _sim_at(rate)
+            return float(r.portfolio_survival_rate or 0.0)
+
+        # Binary search for the highest rate whose survival is still ≥ target.
+        if _survival(max_rate) >= target:
+            best = max_rate
+        else:
+            lo, hi = 0.0, max_rate
+            for _ in range(20):
+                mid = (lo + hi) / 2.0
+                if _survival(mid) >= target:
+                    lo = mid
+                else:
+                    hi = mid
+            best = lo
+
+        r = _sim_at(best)
+        annual = r.withdrawal_annual_amount or Decimal("0")
+        return MaxSpendingResult(
+            target_survival=Decimal(str(round(target, 1))),
+            max_withdrawal_rate=Decimal(str(round(best, 2))),
+            annual_amount=annual,
+            monthly_amount=Decimal(str(round(float(annual) / 12.0, 2))),
+            achieved_survival=r.portfolio_survival_rate or Decimal("0"),
+            ssa_annual_benefit=r.ssa_annual_benefit,
+            withdrawal_years=wy,
+        )
+
     def run_monte_carlo(
         self,
         years: int = 10,
@@ -913,40 +1029,7 @@ class AnalysisService:
         if initial_value <= 0:
             initial_value = 1.0
 
-        # ── Regime conditioning — manual override OR auto Markov detection ─────
-        portfolio_regime: RegimeState | None = None
-
-        if regime_override and regime_override.lower() != "base":
-            # Manual regime selected by user — build a synthetic RegimeState
-            from app.schemas.analysis import RegimeTransition
-            _rt = RegimeTransition(bull=0.0, sideways=0.0, bear=0.0)
-            _name = regime_override.capitalize()  # "bull"→"Bull" etc.
-            portfolio_regime = RegimeState(
-                symbol="Manual Override",
-                current_regime=_name,
-                persist_pct=0.0,
-                one_step=_rt, five_step=_rt, stationary=_rt,
-                signal_score=0.0,
-                lookback_days=0,
-            )
-        elif not regime_override:
-            # Auto-detect: portfolio-blended Markov (never blocks on failure)
-            try:
-                from app.services.markov_regime_service import MarkovRegimeService
-                symbols_with_data = [h.symbol for h in summary.holdings if h.symbol]
-                weights_map = {
-                    h.symbol: float(h.market_value) / initial_value
-                    for h in summary.holdings
-                    if h.symbol and float(h.market_value) > 0
-                }
-                if symbols_with_data:
-                    portfolio_regime, _ = MarkovRegimeService().get_portfolio_and_ticker_regimes(
-                        symbols=symbols_with_data,
-                        weights=weights_map,
-                    )
-            except Exception:
-                pass
-        # else: regime_override == "base" → portfolio_regime stays None (no conditioning)
+        portfolio_regime = self._resolve_portfolio_regime(summary, initial_value, regime_override)
 
         # Current allocation weights
         current_alloc = {k: float(v) / 100 for k, v in summary.allocation.items()}

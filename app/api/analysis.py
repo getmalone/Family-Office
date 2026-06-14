@@ -331,6 +331,56 @@ def api_returns(db: Session = Depends(get_db)):
     return JSONResponse(content=result.model_dump(mode="json"))
 
 
+@router.get("/api/max-spending")
+def api_max_spending(
+    target: float = Query(85.0, ge=1, le=99),
+    simulations: int = Query(2000, ge=100, le=10000),
+    monthly_contribution: str | None = Query(None),
+    withdrawal_years: int = Query(30, ge=1, le=50),
+    regime_override: str | None = Query(None),
+    spending_pattern: str = Query("constant"),
+    smile_slow_pct: float = Query(80.0, ge=0, le=100),
+    smile_no_pct: float = Query(65.0, ge=0, le=100),
+    years: int = Query(10, ge=0, le=50),
+    current_age: int | None = Query(None, ge=18, le=100),
+    retirement_age: int | None = Query(None, ge=30, le=100),
+    ssa_claiming_age: int | None = Query(None, ge=62, le=70),
+    ssa_monthly: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Highest sustainable spending that keeps survival ≥ target (%) — JSON."""
+    svc = AnalysisService(db)
+
+    def _to_decimal(s: str | None) -> Decimal | None:
+        if s and s.strip():
+            try:
+                return Decimal(s.strip())
+            except Exception:
+                pass
+        return None
+
+    regime_ov = regime_override.lower().strip() if regime_override else None
+    if regime_ov == "auto":
+        regime_ov = None
+
+    result = svc.solve_max_spending(
+        years=years,
+        num_simulations=simulations,
+        monthly_contribution=_to_decimal(monthly_contribution) or Decimal("0"),
+        withdrawal_years=withdrawal_years,
+        regime_override=regime_ov,
+        spending_pattern=spending_pattern,
+        smile_slow_pct=smile_slow_pct,
+        smile_no_pct=smile_no_pct,
+        current_age=current_age,
+        retirement_age=retirement_age,
+        ssa_claiming_age=ssa_claiming_age,
+        ssa_monthly_fra=_to_decimal(ssa_monthly) or Decimal("0"),
+        target_survival=target,
+    )
+    return JSONResponse(content=result.model_dump(mode="json"))
+
+
 @router.get("/api/monte-carlo")
 def api_monte_carlo(
     years: int = Query(10, ge=0, le=50),

@@ -162,6 +162,10 @@ accumulation and retirement:
   No-Go step-downs).
 - Compare your current allocation against saved profiles, and read the survival
   rate and bridge summary on each result card.
+- **Max sustainable spending:** below the chart, set a target survival rate
+  (default 85%) and click *Calculate* to see the highest annual/monthly spending
+  that keeps the portfolio's survival at that target — using the same scenario
+  (ages, Social Security, contributions, distribution years, spending pattern).
 
 ### AI assistant (optional)
 
