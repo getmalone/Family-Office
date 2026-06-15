@@ -62,6 +62,17 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     except Exception:
         period_returns = []
 
+    # Holdings that can't be priced (CUSIP-as-symbol or unknown ticker) — surfaced
+    # so the user can map them to real tickers. Cheap DB-only check (no network).
+    try:
+        from app.services.symbol_service import SymbolService
+        unpriceable = [
+            {"symbol": a.symbol, "name": a.name}
+            for a in SymbolService(db).unpriceable_assets()
+        ]
+    except Exception:
+        unpriceable = []
+
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -70,6 +81,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             "tax_summary": tax_summary,
             "pending_approvals": pending_count,
             "period_returns": period_returns,
+            "unpriceable": unpriceable,
             "page_title": "Dashboard",
         },
     )

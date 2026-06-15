@@ -25,6 +25,17 @@ def refresh_prices(db: Session = Depends(get_db)):
     previous reading. Stable-value holdings (CASH, money markets) are pinned to
     $1.00 and never priced from yfinance."""
     from app.services.snapshot_service import SnapshotService
+    from app.services.market_data import MarketDataService
+
+    # One-time: pull and store deep history so trailing-window returns are real
+    # and the day-change has a solid prior-day baseline. Idempotent + gated, so
+    # it only does heavy work on the first refresh after a fresh import.
+    try:
+        md = MarketDataService(db)
+        if md.history_is_thin():
+            md.backfill_history()
+    except Exception:
+        pass
 
     try:
         result = SnapshotService(db).capture(force=True)
@@ -39,6 +50,22 @@ def refresh_prices(db: Session = Depends(get_db)):
         pass
 
     return JSONResponse(result)
+
+
+@router.post("/resolve-symbols")
+def resolve_symbols(db: Session = Depends(get_db)):
+    """Map CUSIP-symbol holdings to real tickers (via OpenFIGI) so they price
+    correctly, then backfill their history. Returns a resolved/unresolved report."""
+    from app.services.symbol_service import SymbolService
+    from app.services.market_data import MarketDataService
+
+    report = SymbolService(db).resolve_and_fix()
+    if report.get("resolved"):
+        try:
+            MarketDataService(db).backfill_history()
+        except Exception:
+            pass
+    return JSONResponse(report)
 
 
 @router.get("/status")

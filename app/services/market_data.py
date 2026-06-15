@@ -12,6 +12,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset, AssetPrice
+from app.models.tax_lot import TaxLot
 
 
 # Symbols that are always $1.00 — never query yfinance for these.
@@ -67,6 +68,87 @@ class MarketDataService:
             if price is not None and asset.symbol:
                 results[asset.symbol] = price
         return results
+
+    def _held_public_assets(self) -> list[Asset]:
+        """Currently-held assets that are publicly traded with a non-stable ticker."""
+        held_ids = {
+            aid for (aid,) in self.session.query(TaxLot.asset_id)
+            .filter(TaxLot.is_closed == False).distinct()
+        }
+        if not held_ids:
+            return []
+        assets = (
+            self.session.query(Asset)
+            .filter(Asset.id.in_(held_ids), Asset.is_publicly_traded == True, Asset.symbol.isnot(None))
+            .all()
+        )
+        return [a for a in assets if (a.symbol or "").upper() not in STABLE_VALUE_SYMBOLS]
+
+    def history_is_thin(self, min_dates: int = 200) -> bool:
+        """True when held public assets lack deep price history (so a backfill is
+        worthwhile). False when there are no such holdings — keeps it a no-op on
+        an empty database."""
+        assets = self._held_public_assets()
+        if not assets:
+            return False
+        distinct_dates = (
+            self.session.query(AssetPrice.price_date)
+            .filter(AssetPrice.asset_id.in_([a.id for a in assets]))
+            .distinct().count()
+        )
+        return distinct_dates < min_dates
+
+    def backfill_history(self, months: int = 24) -> dict:
+        """Download daily closes for held public assets and persist any *missing*
+        dates into AssetPrice (idempotent). Powers real trailing-window returns and
+        a robust prior-day baseline for the day-change."""
+        assets = self._held_public_assets()
+        if not assets:
+            return {"symbols": 0, "rows_added": 0}
+
+        sym_to_id = {a.symbol: a.id for a in assets}
+        symbols = list(sym_to_id.keys())
+        start = date.today() - timedelta(days=int(months * 31))
+
+        try:
+            import yfinance as yf
+            raw = yf.download(
+                symbols, start=str(start), end=str(date.today() + timedelta(days=1)),
+                auto_adjust=True, progress=False, threads=True,
+            )
+        except Exception:
+            return {"symbols": len(symbols), "rows_added": 0}
+        if raw is None or raw.empty:
+            return {"symbols": len(symbols), "rows_added": 0}
+
+        close = raw["Close"] if "Close" in getattr(raw, "columns", []) else raw
+        series_by_symbol: dict[str, object] = {}
+        if hasattr(close, "columns"):                       # multi-ticker DataFrame
+            for sym in symbols:
+                if sym in close.columns:
+                    series_by_symbol[sym] = close[sym].dropna()
+        elif len(symbols) == 1:                             # single-ticker Series
+            series_by_symbol[symbols[0]] = close.dropna()
+
+        rows_added = 0
+        for sym, series in series_by_symbol.items():
+            asset_id = sym_to_id[sym]
+            existing = {
+                d for (d,) in self.session.query(AssetPrice.price_date)
+                .filter(AssetPrice.asset_id == asset_id).all()
+            }
+            for ts, price in series.items():
+                d = ts.date() if hasattr(ts, "date") else ts
+                if d in existing or price is None:
+                    continue
+                self.session.add(AssetPrice(
+                    asset_id=asset_id, price_date=d,
+                    close_price=Decimal(str(round(float(price), 6))), source="yfinance-backfill",
+                ))
+                existing.add(d)
+                rows_added += 1
+        self.session.flush()
+        return {"symbols": len(symbols), "rows_added": rows_added}
 
     def get_price_history(
         self, asset_id: int, start_date: date, end_date: date | None = None

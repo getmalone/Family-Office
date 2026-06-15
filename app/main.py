@@ -105,3 +105,34 @@ def startup():
             session.close()
     except Exception:
         pass
+
+    # Kick off a one-time price-history backfill in the background when the held
+    # public holdings lack deep history. The thin-check is cheap and returns
+    # False on an empty database, so this is a no-op in tests / fresh installs
+    # with no holdings; otherwise a daemon thread fills ~2 years of daily closes
+    # so trailing-window returns are real and the day-change has a baseline.
+    try:
+        import threading
+        from app.services.db import get_factory as _gf
+        from app.services.market_data import MarketDataService as _MD
+
+        _check = _gf()()
+        try:
+            should = _MD(_check).history_is_thin()
+        finally:
+            _check.close()
+
+        if should:
+            def _backfill_worker():
+                try:
+                    s = _gf()()
+                    try:
+                        _MD(s).backfill_history()
+                        s.commit()
+                    finally:
+                        s.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_backfill_worker, daemon=True).start()
+    except Exception:
+        pass

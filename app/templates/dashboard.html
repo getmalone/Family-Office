@@ -21,6 +21,52 @@
       </div>
     </a>
 
+    {% if unpriceable %}
+    <!-- Unpriceable holdings warning (CUSIP-as-symbol / unknown ticker) -->
+    <div class="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <div class="text-sm font-semibold text-amber-800">⚠️ {{ unpriceable|length }} holding{{ 's' if unpriceable|length != 1 }} can't be priced</div>
+          <div class="text-xs text-amber-700 mt-0.5">
+            Their symbol is a CUSIP or unknown ticker, so they show $0 P&amp;L and are held flat in returns:
+            {% for u in unpriceable[:6] %}<span class="font-mono">{{ u.symbol }}</span> ({{ u.name[:24] }}){% if not loop.last %}, {% endif %}{% endfor %}{% if unpriceable|length > 6 %} +{{ unpriceable|length - 6 }} more{% endif %}.
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <button type="button" id="fix-tickers-btn" onclick="resolveSymbols()"
+                  class="bg-amber-600 text-white rounded-md px-4 py-2 text-sm hover:bg-amber-700 whitespace-nowrap">Map to tickers</button>
+          <a href="/portfolio/assets" class="text-xs text-amber-700 underline whitespace-nowrap">edit manually</a>
+        </div>
+      </div>
+      <div id="fix-tickers-result" class="text-xs mt-2"></div>
+    </div>
+    <script>
+    async function resolveSymbols() {
+      const btn = document.getElementById('fix-tickers-btn');
+      const out = document.getElementById('fix-tickers-result');
+      btn.disabled = true; btn.textContent = 'Mapping…';
+      try {
+        const r = await fetch('/prices/resolve-symbols', { method: 'POST' });
+        const d = await r.json();
+        const n = (d.resolved || []).length;
+        if (n > 0) {
+          out.className = 'text-xs mt-2 text-emerald-700';
+          out.textContent = `Mapped ${n} holding${n!==1?'s':''} to tickers — reloading…`;
+          setTimeout(() => location.reload(), 900);
+        } else {
+          out.className = 'text-xs mt-2 text-amber-700';
+          out.textContent = 'No CUSIPs could be auto-mapped. Use “edit manually” to set the correct ticker.';
+          btn.disabled = false; btn.textContent = 'Map to tickers';
+        }
+      } catch (_) {
+        out.className = 'text-xs mt-2 text-red-600';
+        out.textContent = 'Could not reach the mapping service. Try again or edit manually.';
+        btn.disabled = false; btn.textContent = 'Map to tickers';
+      }
+    }
+    </script>
+    {% endif %}
+
     <!-- KPI Cards -->
     <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <div class="bg-white overflow-hidden shadow rounded-lg">
