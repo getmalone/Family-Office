@@ -58,6 +58,34 @@
         </div>
     </div>
 
+    {% if period_returns %}
+    <!-- Performance (trailing-window total return of current holdings) -->
+    <div class="bg-white shadow rounded-lg p-5">
+        <div class="flex items-baseline justify-between mb-3">
+            <div class="text-sm font-medium text-gray-500">Performance</div>
+            <div class="text-xs text-gray-400">total return of current holdings</div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {% for r in period_returns %}
+            <div class="rounded-lg border border-gray-100 p-4 text-center">
+                <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide">{{ r.label }}</div>
+                {% if r.available %}
+                <div class="mt-1 text-2xl font-bold {{ 'text-green-600' if r.up else 'text-red-600' }}">
+                    {{ '+' if r.up else '' }}{{ "{:.2f}".format(r.pct) }}%
+                </div>
+                <div class="text-sm {{ 'text-green-600' if r.up else 'text-red-600' }}">
+                    {{ '+' if r.up else '' }}<span class="bal">${{ "{:,.0f}".format(r.dollar) }}</span>
+                </div>
+                {% else %}
+                <div class="mt-1 text-2xl font-bold text-gray-300">—</div>
+                <div class="text-xs text-gray-400">not enough history</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Asset Allocation (percentages only — not sensitive) -->
         <div class="bg-white shadow rounded-lg p-6">

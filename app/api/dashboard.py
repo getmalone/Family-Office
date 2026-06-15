@@ -54,6 +54,14 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         .count()
     )
 
+    # Trailing-window performance (3M / 6M / 12M / YTD). Cached ~60 min; best-effort
+    # so a slow/failed price fetch never blocks the landing page.
+    try:
+        from app.services.analysis_service import AnalysisService
+        period_returns = AnalysisService(db).get_period_returns()
+    except Exception:
+        period_returns = []
+
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -61,6 +69,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             "summary": summary,
             "tax_summary": tax_summary,
             "pending_approvals": pending_count,
+            "period_returns": period_returns,
             "page_title": "Dashboard",
         },
     )

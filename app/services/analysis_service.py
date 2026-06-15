@@ -40,8 +40,13 @@ from app.schemas.analysis import (
     RiskMetrics,
     SimulationOutcome,
 )
-from app.services.market_data import MarketDataService
+from app.services.market_data import MarketDataService, STABLE_VALUE_SYMBOLS
 from app.services.portfolio_service import PortfolioService
+
+# Process-lifetime cache for trailing-window returns, refreshed hourly (the
+# dashboard's landing-page call must stay snappy; period returns barely move
+# intraday). Keyed by "YYYYMMDDHH".
+_PERIOD_RETURNS_CACHE: dict[str, list[dict]] = {}
 
 
 # Assumed annual return and volatility per asset class (used for private assets
@@ -1948,6 +1953,71 @@ class AnalysisService:
             twr_inception=inception_twr,
             annualized_since=inception_date,
         )
+
+    def get_period_returns(self) -> list[dict]:
+        """Trailing-window total return of the CURRENT holdings — 3M / 6M / 12M /
+        YTD — as both a percentage and a dollar gain.
+
+        Each holding is valued buy-and-hold: its window-ago price vs. today's,
+        scaled by current quantity. Cash, private, and positions without enough
+        price history for a window are held flat (0% over that window). Price
+        history comes from the DB when dense enough, otherwise a single bulk
+        yfinance download. Cached ~60 min so the dashboard stays responsive.
+        """
+        from datetime import datetime as _dt
+
+        summary = self.portfolio_svc.get_summary()
+        total_mv = float(summary.total_market_value)
+        if total_mv <= 0:
+            return []
+
+        cache_key = _dt.now().strftime("%Y%m%d%H")
+        if cache_key in _PERIOD_RETURNS_CACHE:
+            return _PERIOD_RETURNS_CACHE[cache_key]
+        _PERIOD_RETURNS_CACHE.clear()  # drop prior hours
+
+        end_date = date.today()
+        symbols = list({
+            h.symbol for h in summary.holdings
+            if h.symbol and h.symbol.upper() not in STABLE_VALUE_SYMBOLS
+        })
+        all_returns = (
+            self._bulk_daily_returns(symbols, end_date - timedelta(days=430), end_date)
+            if symbols else {}
+        )
+
+        ytd_days = round((end_date - date(end_date.year, 1, 1)).days * 252 / 365)
+        windows = [
+            ("3M", "3-Month", 63), ("6M", "6-Month", 126),
+            ("12M", "12-Month", 252), ("YTD", "YTD", max(1, ytd_days)),
+        ]
+
+        out: list[dict] = []
+        for key, label, n in windows:
+            start_val = 0.0
+            any_data = False
+            for h in summary.holdings:
+                mv = float(h.market_value)
+                cum = 0.0  # flat default — cash / private / insufficient history
+                sym = h.symbol.upper() if h.symbol else None
+                if sym and sym not in STABLE_VALUE_SYMBOLS:
+                    rets = all_returns.get(h.symbol)
+                    if rets is not None and len(rets) >= n:
+                        cum = float(np.prod(1 + rets[-n:])) - 1
+                        any_data = True
+                start_val += mv / (1 + cum) if cum > -1 else mv
+            if not any_data or start_val <= 0:
+                out.append({"key": key, "label": label, "available": False})
+                continue
+            gain = total_mv - start_val
+            out.append({
+                "key": key, "label": label, "available": True,
+                "pct": round(gain / start_val * 100, 2),
+                "dollar": round(gain, 2), "up": gain >= 0,
+            })
+
+        _PERIOD_RETURNS_CACHE[cache_key] = out
+        return out
 
     # ── Seed ────────────────────────────────────────────────────────────
 
