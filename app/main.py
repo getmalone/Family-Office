@@ -101,6 +101,14 @@ def startup():
             # Load user-configured settings (e.g. Anthropic API key) from the
             # encrypted DB so they apply without any .env editing.
             load_into_settings(session)
+            # Scrub any stale stable-value prices (e.g. a "CASH" row stuck at the
+            # ~$83 PGIM ETF price) back to $1.00 on every launch.
+            try:
+                from app.services.market_data import MarketDataService
+                MarketDataService(session).repair_stable_value_prices()
+                session.commit()
+            except Exception:
+                session.rollback()
         finally:
             session.close()
     except Exception:

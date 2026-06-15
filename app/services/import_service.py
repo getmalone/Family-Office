@@ -35,6 +35,7 @@ from app.models.account import Account, AccountTypeEnum
 from app.models.asset import Asset, AssetClassEnum, AssetPrice
 from app.models.tax_lot import TaxLot
 from app.models.transaction import Transaction, TransactionTypeEnum
+from app.services.market_data import STABLE_VALUE_SYMBOLS
 
 _NON_TAXABLE = {
     AccountTypeEnum.IRA_TRADITIONAL,
@@ -269,6 +270,10 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
             assets[akey] = asset
 
         price = _dec(_get(row, "price", "current_price"))
+        # Stable-value holdings (cash, money markets) are always $1.00 — never
+        # take a stray price from the import file for these.
+        if symbol and symbol.upper() in STABLE_VALUE_SYMBOLS:
+            price = Decimal("1")
         cost_total = _dec(_get(row, "cost_basis_total", "cost_basis", "total_cost"))
         cost_per = _dec(_get(row, "cost_per_share", "unit_cost"))
         if cost_per is None:

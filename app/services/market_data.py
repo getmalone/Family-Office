@@ -32,6 +32,13 @@ class MarketDataService:
 
     def get_current_price(self, asset: Asset) -> Decimal | None:
         """Get the most recent price for an asset, fetching from yfinance if stale."""
+        # Stable-value holdings (cash, money markets) are ALWAYS $1.00. Short-circuit
+        # before consulting any stored/cached price so a stale bad row can never
+        # over-value cash — once, a stray yfinance fetch priced "CASH" as the PGIM
+        # Ultra Short Bond ETF (~$83), and the cache would otherwise keep returning it.
+        if asset.symbol and asset.symbol.upper() in STABLE_VALUE_SYMBOLS:
+            return Decimal("1")
+
         if not asset.is_publicly_traded or not asset.symbol:
             return self._get_latest_manual_price(asset.id)
 
@@ -149,6 +156,26 @@ class MarketDataService:
                 rows_added += 1
         self.session.flush()
         return {"symbols": len(symbols), "rows_added": rows_added}
+
+    def repair_stable_value_prices(self) -> int:
+        """Reset any stored price for stable-value holdings back to $1.00.
+
+        get_current_price already forces $1 for these, but the morning brief,
+        charts, day-change and history read ``asset_prices`` directly — so this
+        scrubs stale rows (e.g. a "CASH" row left at the ~$83 PGIM ETF price)
+        without depending on the one-time repair migration. Returns rows fixed.
+        """
+        stable_ids = [
+            a.id for a in self.session.query(Asset).filter(Asset.symbol.isnot(None)).all()
+            if (a.symbol or "").upper() in STABLE_VALUE_SYMBOLS
+        ]
+        if not stable_ids:
+            return 0
+        return (
+            self.session.query(AssetPrice)
+            .filter(AssetPrice.asset_id.in_(stable_ids), AssetPrice.close_price != 1)
+            .update({AssetPrice.close_price: 1}, synchronize_session=False)
+        )
 
     def get_price_history(
         self, asset_id: int, start_date: date, end_date: date | None = None
