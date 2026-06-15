@@ -9,7 +9,7 @@ wealth transfer while always prioritizing long-term financial security.
 from app.models.base import Base, TimestampMixin
 from app.models.family import FamilyMember, FamilyEntity, Ownership
 from app.models.account import Account, AccountTypeEnum, TAX_BUCKETS, tax_bucket_for
-from app.models.asset import Asset, AssetClassEnum, AssetPrice
+from app.models.asset import Asset, AssetClassEnum, AssetPrice, PriceSnapshot
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.models.tax_lot import TaxLot, TaxLotDisposal, WashSaleAdjustment
 from app.models.journal import ChartOfAccounts, JournalEntry, JournalLine
@@ -34,6 +34,7 @@ __all__ = [
     "Asset",
     "AssetClassEnum",
     "AssetPrice",
+    "PriceSnapshot",
     "Transaction",
     "TransactionTypeEnum",
     "TaxLot",

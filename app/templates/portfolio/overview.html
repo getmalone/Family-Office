@@ -50,7 +50,7 @@
                     <td class="px-4 py-3 text-sm font-medium">{{ h.symbol or h.name }}</td>
                     <td class="px-4 py-3 text-sm text-gray-500">{{ h.account_name }}</td>
                     <td class="px-4 py-3 text-sm text-gray-500">{{ h.asset_class | replace("_", " ") | title }}</td>
-                    <td class="px-4 py-3 text-sm text-right"><span class="bal">{{ "{:,.4f}".format(h.quantity) }}</span></td>
+                    <td class="px-4 py-3 text-sm text-right"><span class="bal">{% if h.asset_class == 'crypto' %}{{ "{:,.6f}".format(h.quantity) }}{% else %}{{ "{:,.2f}".format(h.quantity) }}{% endif %}</span></td>
                     <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(h.cost_basis) }}</span></td>
                     <td class="px-4 py-3 text-sm text-right"><span class="bal">${{ "{:,.2f}".format(h.market_value) }}</span></td>
                     <td class="px-4 py-3 text-sm text-right {% if h.unrealized_gain_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}">

@@ -1,10 +1,10 @@
 """Asset and price models for the Family Office."""
 
 import enum
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -61,3 +61,26 @@ class AssetPrice(Base):
     low_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     volume: Mapped[int | None] = mapped_column(nullable=True)
     source: Mapped[str] = mapped_column(String(50), default="yfinance")
+
+
+class PriceSnapshot(Base):
+    """Intraday price reading, one per (asset, day, session bucket).
+
+    Unlike AssetPrice (a single daily close), this keeps several readings per
+    day — pre-market / morning / midday / evening, plus any manual refresh — so
+    the app can show the portfolio's change *since the immediately preceding
+    reading* rather than only since yesterday's close. A repeated refresh within
+    the same bucket updates that bucket's reading in place (latest price wins).
+    """
+
+    __tablename__ = "price_snapshots"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "price_date", "bucket", name="uq_snapshot_asset_date_bucket"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    price_date: Mapped[date] = mapped_column(Date, index=True)
+    bucket: Mapped[str] = mapped_column(String(12))   # premarket | morning | midday | evening
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    captured_at: Mapped[datetime] = mapped_column(DateTime)   # last update, ET-naive

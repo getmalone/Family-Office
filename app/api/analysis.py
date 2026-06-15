@@ -28,11 +28,21 @@ def morning_brief(
     db: Session = Depends(get_db),
 ):
     """Daily brief — morning context or evening report, cached per market session."""
+    from app.services.snapshot_service import SnapshotService
+    snap = SnapshotService(db)
+
     if refresh:
         # Prices were already updated by the JS two-step (POST /prices/refresh
         # then GET /analysis/morning?refresh=1).  All we do here is bust the cache.
         from app.services.morning_brief_service import invalidate_brief_cache
         invalidate_brief_cache()
+    else:
+        # Opportunistic capture on open — internally throttled so it only hits
+        # the network when the latest reading is stale (>30 min).
+        try:
+            snap.capture(force=False)
+        except Exception:
+            pass
 
     svc = MorningBriefService(db)
     try:
@@ -49,10 +59,18 @@ def morning_brief(
             "narrative": [f"Unable to load market data: {e}"],
             "market_regime": None,
         }
+
+    try:
+        port_change = snap.change_since_previous()
+        readings = snap.recent_readings()
+    except Exception:
+        port_change, readings = {"available": False}, []
+
     # page_title drives the sub-nav active state — keep it stable
     return templates.TemplateResponse(
         "analysis/morning.html",
-        {"request": request, "brief": brief, "page_title": "Morning Brief"},
+        {"request": request, "brief": brief, "port_change": port_change,
+         "readings": readings, "page_title": "Morning Brief"},
     )
 
 

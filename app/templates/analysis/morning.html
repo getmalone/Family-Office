@@ -52,18 +52,37 @@
       {% endif %}
     </div>
 
-    {# Portfolio day change hero #}
+    {# Portfolio change hero — measured against the immediately preceding reading #}
     {% set pd = brief.portfolio_day %}
+    {% if port_change and port_change.available and port_change.has_prev %}
+    {% set up = port_change.change >= 0 %}
     <div class="text-right">
-      <div class="text-xs text-gray-400 uppercase tracking-wide">Portfolio Today</div>
-      <div class="text-3xl font-extrabold {{ 'text-emerald-600' if pd.up else 'text-red-600' }}">
-        <span class="bal bal-xl">{{ '+' if pd.up else '' }}${{ "{:,.0f}".format(pd.day_chg) }}</span>
+      <div class="text-xs text-gray-400 uppercase tracking-wide">Since {{ port_change.since_label }}</div>
+      <div class="text-3xl font-extrabold {{ 'text-emerald-600' if up else 'text-red-600' }}">
+        <span class="bal bal-xl">{{ '+' if up else '' }}${{ "{:,.0f}".format(port_change.change) }}</span>
       </div>
-      <div class="text-sm font-semibold {{ 'text-emerald-500' if pd.up else 'text-red-500' }}">
-        {{ '+' if pd.up else '' }}{{ "{:.2f}".format(pd.day_chg_pct) }}%
-        &nbsp;·&nbsp; AUM <span class="bal">${{ "{:,.0f}".format(pd.total_mv) }}</span>
+      <div class="text-sm font-semibold {{ 'text-emerald-500' if up else 'text-red-500' }}">
+        {{ '+' if up else '' }}{{ "{:.2f}".format(port_change.change_pct) }}%
+        &nbsp;·&nbsp; AUM <span class="bal">${{ "{:,.0f}".format(port_change.total_aum) }}</span>
+      </div>
+      {% if readings and readings|length > 1 %}
+      <div class="text-xs text-gray-400 mt-1">
+        {% for r in readings %}{{ r.label }} <span class="bal">${{ "{:,.0f}".format(r.value) }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% else %}
+    {# Only one reading captured so far — show AUM; the change appears next update. #}
+    <div class="text-right">
+      <div class="text-xs text-gray-400 uppercase tracking-wide">Portfolio</div>
+      <div class="text-3xl font-extrabold text-gray-700">
+        <span class="bal bal-xl">${{ "{:,.0f}".format(port_change.total_aum if (port_change and port_change.available) else pd.total_mv) }}</span>
+      </div>
+      <div class="text-sm font-medium text-gray-400">
+        AUM · first reading captured — change shows after the next update
       </div>
     </div>
+    {% endif %}
   </div>
 
   {# ── Narrative ─────────────────────────────────────────────────────────── #}
