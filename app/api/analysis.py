@@ -239,6 +239,17 @@ def monte_carlo_page(
     retirement_age: int | None = Query(None, ge=30, le=100),
     ssa_claiming_age: int | None = Query(None, ge=62, le=70),
     ssa_monthly: str | None = Query(None),  # est. monthly benefit at Full Retirement Age (67)
+    fra_age: int = Query(67, ge=66, le=67),         # primary's full retirement age (pre-1960 birth → 66)
+    spouse_monthly: str | None = Query(None),       # spouse's est. monthly benefit at their FRA
+    spouse_claiming_age: int | None = Query(None, ge=62, le=70),
+    spouse_current_age: int | None = Query(None, ge=18, le=100),
+    spouse_fra_age: int = Query(67, ge=66, le=67),
+    income_bridge: bool = Query(False),     # model account-type withdrawal sequencing + taxes
+    deferred_tax_rate: float = Query(18.0, ge=0, le=50),  # effective % tax on tax-deferred withdrawals
+    taxable_tax_rate: float = Query(10.0, ge=0, le=50),   # effective % cap-gains drag on taxable
+    bucket_taxable: str | None = Query(None),       # manual override of today's taxable $ balance
+    bucket_traditional: str | None = Query(None),   # manual override of tax-deferred $ balance
+    bucket_roth: str | None = Query(None),          # manual override of tax-free (Roth) $ balance
     db: Session = Depends(get_db),
 ):
     """Monte Carlo simulation page."""
@@ -266,6 +277,20 @@ def monte_carlo_page(
     ssa_monthly_decimal = _to_decimal(ssa_monthly) or Decimal("0")
     ssa_monthly_display = float(ssa_monthly_decimal) if ssa_monthly_decimal else None
 
+    spouse_monthly_decimal = _to_decimal(spouse_monthly) or Decimal("0")
+    spouse_monthly_display = float(spouse_monthly_decimal) if spouse_monthly_decimal else None
+
+    # Manual bucket overrides — when any is supplied, use them verbatim (handy
+    # before the real accounts are loaded); otherwise the service auto-derives
+    # the buckets from the account ledger.
+    bucket_overrides: dict[str, float] | None = None
+    if income_bridge and any(v is not None and v.strip() for v in (bucket_taxable, bucket_traditional, bucket_roth)):
+        bucket_overrides = {
+            "taxable": float(_to_decimal(bucket_taxable) or 0),
+            "traditional": float(_to_decimal(bucket_traditional) or 0),
+            "roth": float(_to_decimal(bucket_roth) or 0),
+        }
+
     # Normalise override: treat "auto"/None the same way (service auto-detects)
     regime_ov = regime_override.lower().strip() if regime_override else None
     if regime_ov == "auto":
@@ -286,6 +311,15 @@ def monte_carlo_page(
         retirement_age=retirement_age,
         ssa_claiming_age=ssa_claiming_age,
         ssa_monthly_fra=ssa_monthly_decimal,
+        fra_age=fra_age,
+        spouse_monthly_fra=spouse_monthly_decimal,
+        spouse_claiming_age=spouse_claiming_age,
+        spouse_current_age=spouse_current_age,
+        spouse_fra_age=spouse_fra_age,
+        income_bridge=income_bridge,
+        bucket_balances=bucket_overrides,
+        deferred_tax_rate=deferred_tax_rate / 100.0,
+        taxable_tax_rate=taxable_tax_rate / 100.0,
     )
 
     return templates.TemplateResponse(
@@ -307,6 +341,17 @@ def monte_carlo_page(
             "retirement_age": retirement_age,
             "ssa_claiming_age": ssa_claiming_age,
             "ssa_monthly": ssa_monthly_display,
+            "fra_age": fra_age,
+            "spouse_monthly": spouse_monthly_display,
+            "spouse_claiming_age": spouse_claiming_age,
+            "spouse_current_age": spouse_current_age,
+            "spouse_fra_age": spouse_fra_age,
+            "income_bridge": income_bridge,
+            "deferred_tax_rate": deferred_tax_rate,
+            "taxable_tax_rate": taxable_tax_rate,
+            "bucket_taxable": bucket_taxable,
+            "bucket_traditional": bucket_traditional,
+            "bucket_roth": bucket_roth,
             "page_title": "Monte Carlo",
         },
     )

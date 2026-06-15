@@ -13,7 +13,7 @@ from decimal import Decimal
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.account import Account
+from app.models.account import Account, tax_bucket_for
 from app.models.asset import Asset, AssetPrice
 from app.models.tax_lot import TaxLot, TaxLotDisposal, WashSaleAdjustment
 from app.models.transaction import Transaction, TransactionTypeEnum
@@ -414,6 +414,27 @@ class PortfolioService:
                     lot.original_cost_basis_per_unit = new_cost_basis_per_unit
 
         self.session.flush()
+
+    def get_tax_bucket_balances(self) -> dict[str, Decimal]:
+        """Current market value split into withdrawal-sequencing tax buckets.
+
+        Returns {"taxable": .., "traditional": .., "roth": ..}. Buckets sum to
+        the portfolio's total market value; account types are mapped via
+        ``tax_bucket_for``. Used to seed the Monte Carlo Income Bridge.
+        """
+        balances: dict[str, Decimal] = {"taxable": Decimal("0"),
+                                        "traditional": Decimal("0"),
+                                        "roth": Decimal("0")}
+        summary = self.get_summary()
+        bucket_of: dict[int, str] = {}
+        for h in summary.holdings:
+            bucket = bucket_of.get(h.account_id)
+            if bucket is None:
+                account = self.session.get(Account, h.account_id)
+                bucket = tax_bucket_for(account.account_type) if account else "taxable"
+                bucket_of[h.account_id] = bucket
+            balances[bucket] += h.market_value
+        return balances
 
     def delete_position(self, asset_id: int, account_id: int) -> int:
         """

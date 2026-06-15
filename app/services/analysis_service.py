@@ -21,15 +21,20 @@ from app.models.tax_lot import TaxLot
 from app.schemas.analysis import (
     AllocationTarget,
     AssetClassRisk,
+    BridgeBucket,
+    BridgeYearFunding,
     ConcentrationRisk,
     CorrelationMatrix,
     DriftAnalysis,
+    IncomeBridge,
     InvestmentProfileSchema,
     LookthroughPosition,
     MonteCarloComparison,
     MonteCarloResult,
     PositionRisk,
     RebalanceAction,
+    SsaHousehold,
+    SsaPerson,
     RegimeState,
     ReturnMetrics,
     RiskMetrics,
@@ -1012,6 +1017,15 @@ class AnalysisService:
         retirement_age: int | None = None,
         ssa_claiming_age: int | None = None,
         ssa_monthly_fra: Decimal = Decimal("0"),  # est. monthly benefit at Full Retirement Age (67)
+        fra_age: int = 67,                                  # primary's full retirement age (66–67)
+        spouse_monthly_fra: Decimal = Decimal("0"),         # spouse benefit at their FRA ($/mo)
+        spouse_claiming_age: int | None = None,             # spouse claims at this age (62–70)
+        spouse_current_age: int | None = None,              # spouse's age today (places them on the timeline)
+        spouse_fra_age: int = 67,                           # spouse's full retirement age (66–67)
+        income_bridge: bool = False,                       # model account-type withdrawal sequencing + taxes
+        bucket_balances: dict[str, float] | None = None,   # taxable/traditional/roth $; auto-derived if None
+        deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
+        taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
     ) -> MonteCarloComparison:
         """
         Run Monte Carlo simulation for current allocation and optionally target.
@@ -1045,23 +1059,56 @@ class AnalysisService:
         if current_age is not None and retirement_age is not None:
             years = max(0, int(retirement_age) - int(current_age))
 
-        # Convert the FRA benefit estimate into a claiming-age-adjusted figure.
-        # SSA only participates when we know *when* it starts (both ages) and how
-        # much (a positive benefit). Otherwise it's disabled and the model is
-        # identical to before.
-        ssa_annual_float = 0.0
+        # ── Social Security (one or two earners) ──────────────────────────────
+        # Build the per-year household benefit schedule. SSA only participates
+        # when we know *when* it starts (ages) and how much (a positive benefit);
+        # otherwise the schedule is all-zero and the model is identical to before.
+        # ssa_fra_factor / the single ssa_* result fields describe the PRIMARY.
         ssa_fra_factor: float | None = None
-        if (
-            ssa_monthly_fra and float(ssa_monthly_fra) > 0
-            and ssa_claiming_age is not None
-            and retirement_age is not None
-        ):
-            ssa_fra_factor = self._ssa_claiming_factor(int(ssa_claiming_age))
-            ssa_annual_float = float(ssa_monthly_fra) * 12.0 * ssa_fra_factor
+        if (ssa_monthly_fra and float(ssa_monthly_fra) > 0
+                and ssa_claiming_age is not None and retirement_age is not None):
+            ssa_fra_factor = self._ssa_claiming_factor(int(ssa_claiming_age), int(fra_age))
+
+        ssa_schedule, ssa_household = self._household_ssa(
+            withdrawal_years=withdrawal_years_int,
+            accumulation_years=years,
+            retirement_age=int(retirement_age) if retirement_age is not None else None,
+            primary_monthly_fra=float(ssa_monthly_fra),
+            primary_claiming_age=int(ssa_claiming_age) if ssa_claiming_age is not None else None,
+            primary_fra_age=int(fra_age),
+            spouse_monthly_fra=float(spouse_monthly_fra),
+            spouse_claiming_age=int(spouse_claiming_age) if spouse_claiming_age is not None else None,
+            spouse_current_age=int(spouse_current_age) if spouse_current_age is not None else None,
+            spouse_fra_age=int(spouse_fra_age),
+        )
 
         ca = int(current_age) if current_age is not None else None
         ra = int(retirement_age) if retirement_age is not None else None
         sca = int(ssa_claiming_age) if ssa_claiming_age is not None else None
+
+        # ── Income Bridge: account-type buckets for withdrawal sequencing ──────
+        # When enabled, derive today's taxable/traditional/Roth balances from the
+        # real accounts unless explicit balances were supplied (manual override).
+        if income_bridge and bucket_balances is None:
+            bucket_balances = {
+                k: float(v) for k, v in self.portfolio_svc.get_tax_bucket_balances().items()
+            }
+        # The bridge models the portfolio AS the sum of its buckets. For the
+        # auto-derived path that already equals total market value; for manual
+        # overrides it lets entered balances drive the scale (e.g. before the
+        # real accounts are loaded) instead of an empty ledger's $0.
+        if income_bridge and bucket_balances:
+            bucket_total = sum(max(0.0, float(v)) for v in bucket_balances.values())
+            if bucket_total > 0:
+                initial_value = bucket_total
+        shared_kwargs = dict(
+            ssa_schedule=ssa_schedule,
+            ssa_household=ssa_household,
+            income_bridge=income_bridge,
+            bucket_balances=bucket_balances,
+            deferred_tax_rate=deferred_tax_rate,
+            taxable_tax_rate=taxable_tax_rate,
+        )
 
         # Run simulation for current allocation
         current_result = self._simulate(
@@ -1081,8 +1128,8 @@ class AnalysisService:
             current_age=ca,
             retirement_age=ra,
             ssa_claiming_age=sca,
-            ssa_annual_benefit=ssa_annual_float,
             ssa_fra_factor=ssa_fra_factor,
+            **shared_kwargs,
         )
 
         # Run simulation for target allocation if profile is active
@@ -1108,8 +1155,8 @@ class AnalysisService:
                     current_age=ca,
                     retirement_age=ra,
                     ssa_claiming_age=sca,
-                    ssa_annual_benefit=ssa_annual_float,
                     ssa_fra_factor=ssa_fra_factor,
+                    **shared_kwargs,
                 )
 
         # ── Comparison A / B simulations (user-selected profiles) ────────────
@@ -1134,8 +1181,8 @@ class AnalysisService:
                 current_age=ca,
                 retirement_age=ra,
                 ssa_claiming_age=sca,
-                ssa_annual_benefit=ssa_annual_float,
                 ssa_fra_factor=ssa_fra_factor,
+                **shared_kwargs,
             )
 
         profile_a, profile_b = self.get_comparison_profiles()
@@ -1175,6 +1222,267 @@ class AnalysisService:
         delayed_years = min(age, 70) - fra
         return round(1.0 + delayed_years * 0.08, 6)
 
+    @staticmethod
+    def _ssa_spousal_factor(claiming_age: int, fra: int = 67) -> float:
+        """Spousal benefit as a fraction of the 50%-of-worker's-FRA amount.
+
+        Spousal benefits are reduced when claimed before the claimant's FRA
+        (25/36 of 1%/month for the first 36 months, then 5/12 of 1%/month) and,
+        unlike worker benefits, earn NO delayed credits past FRA:
+          • at 62 (FRA 67) → ~65% of the 50% spousal amount (≈32.5% of the PIA).
+          • at/after FRA   → the full 50%.
+        """
+        age = max(62, min(int(fra), int(claiming_age)))  # capped at FRA — no delayed credit
+        if age >= fra:
+            return 1.0
+        early_months = (fra - age) * 12
+        first36 = min(early_months, 36)
+        beyond = max(early_months - 36, 0)
+        reduction = first36 * (25.0 / 36.0 / 100.0) + beyond * (5.0 / 12.0 / 100.0)
+        return round(1.0 - reduction, 6)
+
+    def _household_ssa(
+        self,
+        *,
+        withdrawal_years: int,
+        accumulation_years: int,
+        retirement_age: int | None,
+        primary_monthly_fra: float,
+        primary_claiming_age: int | None,
+        primary_fra_age: int = 67,
+        spouse_monthly_fra: float = 0.0,
+        spouse_claiming_age: int | None = None,
+        spouse_current_age: int | None = None,
+        spouse_fra_age: int = 67,
+    ) -> "tuple[list[float], SsaHousehold | None]":
+        """Per-year household Social Security schedule + a two-earner summary.
+
+        Models up to two earners on their OWN age timelines: each claims at
+        their own age (62–70) with the standard reduction/delayed-credit factor;
+        the lower earner gets a spousal top-up toward 50% of the higher earner's
+        FRA benefit (reduced if claimed early, payable only once the higher
+        earner has also claimed); the survivor keeps the larger of the two.
+
+        Returns (annual $ per distribution year, summary). The summary is None
+        when there's no spouse, so the single-stream behavior is unchanged.
+        """
+        def _dec(x) -> Decimal:
+            return Decimal(str(round(float(x), 2)))
+
+        primary_on = (primary_monthly_fra > 0 and primary_claiming_age is not None
+                      and retirement_age is not None and withdrawal_years > 0)
+        spouse_on = (spouse_monthly_fra > 0 and spouse_claiming_age is not None
+                     and spouse_current_age is not None and retirement_age is not None
+                     and withdrawal_years > 0)
+        if not primary_on and not spouse_on:
+            return [0.0] * withdrawal_years, None
+
+        def _person(monthly_fra, claiming_age, fra_age, age_at):
+            factor = self._ssa_claiming_factor(int(claiming_age), int(fra_age))
+            active = [age_at(y) >= int(claiming_age) for y in range(withdrawal_years)]
+            return {
+                "monthly_fra": float(monthly_fra), "claiming_age": int(claiming_age),
+                "fra_age": int(fra_age), "factor": factor,
+                "own_monthly": float(monthly_fra) * factor,
+                "active": active,
+                "start": next((y for y, a in enumerate(active) if a), None),
+            }
+
+        pri = (_person(primary_monthly_fra, primary_claiming_age, primary_fra_age,
+                       lambda y: retirement_age + y) if primary_on else None)
+        spo = (_person(spouse_monthly_fra, spouse_claiming_age, spouse_fra_age,
+                       lambda y: spouse_current_age + accumulation_years + y) if spouse_on else None)
+
+        # Spousal top-up for the lower-FRA earner (only when both participate).
+        topup_monthly, topup_target = 0.0, None
+        if pri and spo:
+            higher, lower, topup_target = (
+                (pri, spo, "spouse") if pri["monthly_fra"] >= spo["monthly_fra"]
+                else (spo, pri, "primary"))
+            spousal_entitlement = 0.5 * higher["monthly_fra"] * self._ssa_spousal_factor(
+                lower["claiming_age"], lower["fra_age"])
+            topup_monthly = max(0.0, spousal_entitlement - lower["own_monthly"])
+
+        # Per-year household annual benefit.
+        ssa_per_year = [0.0] * withdrawal_years
+        for y in range(withdrawal_years):
+            monthly = 0.0
+            pri_active = pri["active"][y] if pri else False
+            spo_active = spo["active"][y] if spo else False
+            if pri_active:
+                monthly += pri["own_monthly"]
+            if spo_active:
+                monthly += spo["own_monthly"]
+            if topup_target and pri_active and spo_active:  # worker must also have claimed
+                monthly += topup_monthly
+            ssa_per_year[y] = monthly * 12.0
+
+        def _to_person(p, label, is_topup_target):
+            tu = topup_monthly if is_topup_target else 0.0
+            total_monthly = p["own_monthly"] + tu
+            return SsaPerson(
+                label=label, monthly_fra=_dec(p["monthly_fra"]), fra_age=p["fra_age"],
+                claiming_age=p["claiming_age"], fra_factor=p["factor"],
+                own_monthly_benefit=_dec(p["own_monthly"]), spousal_monthly_benefit=_dec(tu),
+                monthly_benefit=_dec(total_monthly), annual_benefit=_dec(total_monthly * 12.0),
+                starts_plan_year=(p["start"] + 1) if p["start"] is not None else None,
+            )
+
+        household = None
+        if pri and spo:
+            people = [_to_person(pri, "You", topup_target == "primary"),
+                      _to_person(spo, "Spouse", topup_target == "spouse")]
+            survivor_monthly = max(pri["own_monthly"], spo["own_monthly"])
+            first = next((y for y in range(withdrawal_years) if ssa_per_year[y] > 0), None)
+            household = SsaHousehold(
+                people=people,
+                combined_annual_benefit=_dec(max(ssa_per_year) if withdrawal_years else 0.0),
+                survivor_annual_benefit=_dec(survivor_monthly * 12.0),
+                first_benefit_plan_year=(first + 1) if first is not None else None,
+            )
+        return ssa_per_year, household
+
+    def _run_income_bridge(
+        self,
+        *,
+        final_vals,                       # (num_sims,) accumulation-ending values
+        annual_wdraw,                     # (num_sims,) Go-Go after-tax spend per sim
+        smile_mults,                      # (withdrawal_years,) spending-smile multipliers
+        ssa_per_year,                     # (withdrawal_years,) guaranteed income per year
+        dist_gf,                          # (num_sims, withdrawal_years) growth factors
+        bucket_balances: dict[str, float],
+        deferred_tax_rate: float,
+        taxable_tax_rate: float,
+        withdrawal_years: int,
+        num_simulations: int,
+        retirement_age: int | None,
+        ssa_claiming_age: int | None,
+    ) -> "tuple[np.ndarray, IncomeBridge]":
+        """Distribution phase with account-type buckets and ordered, taxed
+        withdrawals — taxable → traditional → Roth.
+
+        The smile-adjusted withdrawal is treated as the household's *after-tax*
+        spending need. Each year, guaranteed income (Social Security) is applied
+        first; the remaining net need is then pulled from the buckets in order,
+        grossing up tax-deferred withdrawals (and lightly taxing taxable ones) so
+        the gross drawn reflects the account tapped. Roth is tax-free. A bucket
+        that empties is skipped; if every bucket empties the household can't fund
+        that year and the portfolio is at ruin.
+
+        Returns the per-year total-portfolio values (same shape the single-pooled
+        path produces, so the fan chart and summary stats are unchanged) plus an
+        IncomeBridge summary of medians answering "which accounts fund the
+        pre-SSA years".
+        """
+        def _d(x) -> Decimal:
+            return Decimal(str(round(float(x), 2)))
+
+        order = ("taxable", "traditional", "roth")
+        labels = {"taxable": "Taxable",
+                  "traditional": "Tax-Deferred",
+                  "roth": "Tax-Free (Roth)"}
+        rates = {
+            "taxable": max(0.0, min(0.95, float(taxable_tax_rate))),
+            "traditional": max(0.0, min(0.95, float(deferred_tax_rate))),
+            "roth": 0.0,
+        }
+
+        # Split each simulation's accumulation-ending value into buckets using
+        # today's proportions (accumulation grows/contributes pro-rata).
+        start_total = sum(max(0.0, float(bucket_balances.get(b, 0.0))) for b in order)
+        props = {b: (max(0.0, float(bucket_balances.get(b, 0.0))) / start_total
+                     if start_total > 0 else 0.0)
+                 for b in order}
+        buckets = {b: final_vals * props[b] for b in order}
+
+        dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
+        taxes_per_sim = np.zeros(num_simulations, dtype=float)
+        funding_by_year: list[BridgeYearFunding] = []
+        depletes_year: dict[str, int | None] = {b: None for b in order}
+
+        for y in range(withdrawal_years):
+            # Grow every bucket, then meet the year's net spending need in order.
+            for b in order:
+                buckets[b] = buckets[b] * dist_gf[:, y]
+
+            spending_need = annual_wdraw * smile_mults[y]                    # after-tax $ wanted
+            need = np.maximum(spending_need - ssa_per_year[y], 0.0)          # left after SSA
+
+            gross_by_src: dict[str, "np.ndarray"] = {}
+            for b in order:
+                net_factor = 1.0 - rates[b]
+                gross_needed = need / net_factor if net_factor > 0 else need
+                gross_taken = np.minimum(buckets[b], gross_needed)
+                net_delivered = gross_taken * net_factor
+                buckets[b] = buckets[b] - gross_taken
+                taxes_per_sim += gross_taken - net_delivered
+                need = need - net_delivered
+                gross_by_src[b] = gross_taken
+
+            dist_values[:, y] = buckets["taxable"] + buckets["traditional"] + buckets["roth"]
+
+            age = (retirement_age + y) if retirement_age is not None else None
+            funding_by_year.append(BridgeYearFunding(
+                year=y + 1,
+                age=age,
+                ssa=_d(ssa_per_year[y]),
+                taxable=_d(np.median(gross_by_src["taxable"])),
+                traditional=_d(np.median(gross_by_src["traditional"])),
+                roth=_d(np.median(gross_by_src["roth"])),
+            ))
+            for b in order:
+                if depletes_year[b] is None and props[b] > 0 and float(np.median(buckets[b])) <= 0.0:
+                    depletes_year[b] = y + 1
+
+        # ── Gap & Bridge numbers ───────────────────────────────────────────────
+        # The bridge is the run of years before the FIRST Social Security dollar
+        # arrives (whichever spouse claims earliest) — that's the stretch the
+        # portfolio funds at 100%.
+        first_ssa = next((y for y in range(withdrawal_years) if ssa_per_year[y] > 0), None)
+        bridge_years = first_ssa if first_ssa is not None else 0
+
+        # Annual after-tax spend the portfolio covers in the first retirement year.
+        gap_annual = (float(np.median(np.maximum(
+            annual_wdraw * smile_mults[0] - ssa_per_year[0], 0.0)))
+            if withdrawal_years else 0.0)
+
+        # Total gross capital to fund the pre-SSA window = sum of median gross
+        # draws (all sources) across the bridge years.
+        bridge_number = sum(
+            float(r.taxable) + float(r.traditional) + float(r.roth)
+            for r in funding_by_year[:bridge_years]
+        )
+        bridge_coverage = (float(np.mean(dist_values[:, bridge_years - 1] > 0) * 100.0)
+                           if bridge_years > 0 else 100.0)
+
+        buckets_out: list[BridgeBucket] = []
+        for b in order:
+            dy = depletes_year[b]
+            dage = (retirement_age + dy - 1) if (dy is not None and retirement_age is not None) else None
+            buckets_out.append(BridgeBucket(
+                bucket=b,
+                label=labels[b],
+                start_balance=_d(props[b] * float(np.median(final_vals))),
+                end_median=_d(np.median(buckets[b])),
+                depletes_year=dy,
+                depletes_age=dage,
+            ))
+
+        bridge = IncomeBridge(
+            enabled=True,
+            buckets=buckets_out,
+            total_start=_d(np.median(final_vals)),
+            gap_annual=_d(gap_annual),
+            bridge_years=bridge_years,
+            bridge_number=_d(bridge_number),
+            bridge_coverage_pct=_d(bridge_coverage),
+            deferred_tax_rate=_d(rates["traditional"] * 100.0),
+            taxable_tax_rate=_d(rates["taxable"] * 100.0),
+            taxes_total_median=_d(np.median(taxes_per_sim)),
+            funding_by_year=funding_by_year,
+        )
+        return dist_values, bridge
+
     def _simulate(
         self,
         label: str,
@@ -1193,8 +1501,14 @@ class AnalysisService:
         current_age: int | None = None,
         retirement_age: int | None = None,
         ssa_claiming_age: int | None = None,
-        ssa_annual_benefit: float = 0.0,   # claiming-age-adjusted SSA, $/year
+        ssa_annual_benefit: float = 0.0,   # claiming-age-adjusted SSA, $/year (scalar fallback)
         ssa_fra_factor: float | None = None,
+        ssa_schedule: list[float] | None = None,           # per-year household SSA $ (one or two earners)
+        ssa_household: "SsaHousehold | None" = None,        # two-earner summary, attached to the result
+        income_bridge: bool = False,                       # model account-type sequencing + taxes
+        bucket_balances: dict[str, float] | None = None,   # today's taxable/traditional/roth $ balances
+        deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
+        taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
     ) -> MonteCarloResult:
         """
         Two-phase Monte Carlo: accumulation → distribution.
@@ -1331,6 +1645,7 @@ class AnalysisService:
         ssa_total_out: Decimal | None = None
         bridge_years_out: int | None = None
         net_draw_after_ssa_out: Decimal | None = None
+        income_bridge_out: IncomeBridge | None = None
 
         if withdrawal_rate > 0 and withdrawal_years > 0:
             # Per-simulation annual withdrawal: constant dollar amount based on
@@ -1364,11 +1679,16 @@ class AnalysisService:
             dist_gf = np.exp(dist_log_rets)
 
             # ── Social Security income offset ──────────────────────────────────
-            # Before the claiming age the portfolio funds 100% of spending (the
-            # "income bridge"); from the claiming age on, SSA covers part of each
-            # year's need and the portfolio only draws the remaining gap.
+            # Before any benefit starts the portfolio funds 100% of spending (the
+            # "income bridge"); once SSA is flowing it covers part of each year's
+            # need and the portfolio only draws the remaining gap. The per-year
+            # schedule is supplied by run_monte_carlo (one or two earners); the
+            # scalar fallback keeps direct _simulate callers (and tests) working.
             ssa_per_year = np.zeros(withdrawal_years)
-            if (
+            if ssa_schedule is not None:
+                arr = np.asarray(ssa_schedule, dtype=float)
+                ssa_per_year[:len(arr)] = arr[:withdrawal_years]
+            elif (
                 ssa_annual_benefit > 0
                 and retirement_age is not None
                 and ssa_claiming_age is not None
@@ -1377,15 +1697,42 @@ class AnalysisService:
                     if retirement_age + y >= ssa_claiming_age:
                         ssa_per_year[y] = ssa_annual_benefit
 
-            port_d = final_vals.copy()
-            dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
-            for y in range(withdrawal_years):
-                # End-of-year: portfolio grows first; the smile-adjusted spending
-                # need is met from SSA first, then the portfolio covers the rest.
-                spending_need  = annual_wdraw * smile_mults[y]                  # per-sim ($)
-                portfolio_draw = np.maximum(spending_need - ssa_per_year[y], 0.0)
-                port_d = np.maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)
-                dist_values[:, y] = port_d
+            # Bucket balances must be present and positive for the bridge to run.
+            bridge_active = (
+                income_bridge
+                and bucket_balances is not None
+                and sum(max(0.0, float(v)) for v in bucket_balances.values()) > 0
+            )
+
+            if bridge_active:
+                # Account-level withdrawal sequencing (taxable → traditional → Roth)
+                # with a simple effective-tax gross-up. Answers "which accounts
+                # fund the pre-SSA years". Treats the smile-adjusted withdrawal as
+                # the household's *after-tax* spending need.
+                dist_values, income_bridge_out = self._run_income_bridge(
+                    final_vals=final_vals,
+                    annual_wdraw=annual_wdraw,
+                    smile_mults=smile_mults,
+                    ssa_per_year=ssa_per_year,
+                    dist_gf=dist_gf,
+                    bucket_balances=bucket_balances,
+                    deferred_tax_rate=deferred_tax_rate,
+                    taxable_tax_rate=taxable_tax_rate,
+                    withdrawal_years=withdrawal_years,
+                    num_simulations=num_simulations,
+                    retirement_age=retirement_age,
+                    ssa_claiming_age=ssa_claiming_age,
+                )
+            else:
+                port_d = final_vals.copy()
+                dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
+                for y in range(withdrawal_years):
+                    # End-of-year: portfolio grows first; the smile-adjusted spending
+                    # need is met from SSA first, then the portfolio covers the rest.
+                    spending_need  = annual_wdraw * smile_mults[y]                  # per-sim ($)
+                    portfolio_draw = np.maximum(spending_need - ssa_per_year[y], 0.0)
+                    port_d = np.maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)
+                    dist_values[:, y] = port_d
 
             # First point: retirement starting value = end of accumulation.
             # This anchors the orange distribution fan to the exact point where
@@ -1420,16 +1767,19 @@ class AnalysisService:
             total_distributed = med_wdraw * float(np.sum(smile_mults))
 
             # ── Social Security summary (deterministic across sims) ────────────
-            if ssa_annual_benefit > 0 and ssa_per_year.any():
-                ssa_annual_out  = Decimal(str(round(ssa_annual_benefit, 2)))
-                ssa_monthly_out = Decimal(str(round(ssa_annual_benefit / 12.0, 2)))
+            # Derived from the per-year array so one or two earners are handled
+            # identically: the headline annual is the household peak once all
+            # streams are flowing, and the bridge is the years before the first
+            # SSA dollar arrives.
+            if ssa_per_year.any():
+                peak_ssa = float(ssa_per_year.max())
+                ssa_annual_out  = Decimal(str(round(peak_ssa, 2)))
+                ssa_monthly_out = Decimal(str(round(peak_ssa / 12.0, 2)))
                 ssa_total_out   = Decimal(str(round(float(np.sum(ssa_per_year)), 2)))
-                if retirement_age is not None and ssa_claiming_age is not None:
-                    bridge_years_out = max(0, min(withdrawal_years,
-                                                  ssa_claiming_age - retirement_age))
+                first_ssa = next((y for y in range(withdrawal_years) if ssa_per_year[y] > 0), None)
+                bridge_years_out = first_ssa if first_ssa is not None else 0
                 # Portfolio's own Go-Go-level draw once SSA is flowing.
-                net_draw_after_ssa_out = Decimal(str(round(
-                    max(med_wdraw - ssa_annual_benefit, 0.0), 2)))
+                net_draw_after_ssa_out = Decimal(str(round(max(med_wdraw - peak_ssa, 0.0), 2)))
 
             withdrawal_annual_amount = Decimal(str(round(med_wdraw, 2)))
             withdrawal_total         = Decimal(str(round(total_distributed, 2)))
@@ -1474,6 +1824,8 @@ class AnalysisService:
             ssa_total_benefit=ssa_total_out,
             bridge_years=bridge_years_out,
             net_draw_after_ssa=net_draw_after_ssa_out,
+            income_bridge=income_bridge_out,
+            ssa_household=ssa_household,
         )
 
     # ── Correlation Matrix ───────────────────────────────────────────────

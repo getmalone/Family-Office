@@ -8,7 +8,7 @@ wealth transfer while always prioritizing long-term financial security.
 
 from app.models.base import Base, TimestampMixin
 from app.models.family import FamilyMember, FamilyEntity, Ownership
-from app.models.account import Account, AccountTypeEnum
+from app.models.account import Account, AccountTypeEnum, TAX_BUCKETS, tax_bucket_for
 from app.models.asset import Asset, AssetClassEnum, AssetPrice
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.models.tax_lot import TaxLot, TaxLotDisposal, WashSaleAdjustment
@@ -29,6 +29,8 @@ __all__ = [
     "Ownership",
     "Account",
     "AccountTypeEnum",
+    "TAX_BUCKETS",
+    "tax_bucket_for",
     "Asset",
     "AssetClassEnum",
     "AssetPrice",

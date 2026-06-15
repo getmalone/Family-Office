@@ -17,7 +17,9 @@
         <form id="mc-form" method="GET"
               onsubmit="(function(f){
                   ['goal','monthly_contribution','withdrawal_rate',
-                   'current_age','retirement_age','ssa_monthly'].forEach(function(n){
+                   'current_age','retirement_age','ssa_monthly',
+                   'spouse_current_age','spouse_claiming_age','spouse_monthly',
+                   'bucket_taxable','bucket_traditional','bucket_roth'].forEach(function(n){
                       var el=f.elements[n]; if(el && !el.value.trim()) el.disabled=true;
                   });
               })(this)">
@@ -71,21 +73,28 @@
           Retirement Timeline &amp; Social Security
           <span class="text-gray-300 font-normal ml-1">— ages override Accumulation Years above</span>
         </div>
-        <div class="flex flex-wrap items-end gap-4">
+        <div class="flex flex-wrap items-end gap-4 mb-3">
           <div>
-            <label class="block text-sm font-medium text-gray-700">Current Age</label>
+            <label class="block text-sm font-medium text-gray-700">Current Age
+              <span class="text-gray-400 font-normal text-xs ml-1">you</span></label>
             <input type="number" name="current_age" form="mc-form"
                    value="{{ current_age or '' }}" min="18" max="100" step="1" placeholder="e.g. 52"
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-28">
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700">Retirement Age</label>
+            <label class="block text-sm font-medium text-gray-700">Retirement Age
+              <span class="text-gray-400 font-normal text-xs ml-1">household</span></label>
             <input type="number" name="retirement_age" form="mc-form"
                    value="{{ retirement_age or '' }}" min="30" max="100" step="1" placeholder="e.g. 60"
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-28">
           </div>
+        </div>
+
+        {# You #}
+        <div class="text-xs font-semibold text-gray-500 mb-1.5">Your Social Security</div>
+        <div class="flex flex-wrap items-end gap-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700">SSA Claiming Age</label>
+            <label class="block text-sm font-medium text-gray-700">Claiming Age</label>
             <select name="ssa_claiming_age" form="mc-form" class="mt-1 rounded-md border px-3 py-2 text-sm"
                     title="Age you start Social Security. 62 ≈ 70% of FRA, 67 = 100%, 70 ≈ 124%.">
               {% for a in [62, 63, 64, 65, 66, 67, 68, 69, 70] %}
@@ -95,19 +104,62 @@
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700">
-              Est. SSA Benefit
-              <span class="text-gray-400 font-normal text-xs ml-1">$/mo at FRA (67)</span>
+              Est. Benefit <span class="text-gray-400 font-normal text-xs ml-1">$/mo at FRA</span>
             </label>
             <input type="number" name="ssa_monthly" form="mc-form"
                    value="{{ ssa_monthly or '' }}" min="0" step="100" placeholder="e.g. 3,200 — blank = no SSA"
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-52">
           </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Your FRA</label>
+            <select name="fra_age" form="mc-form" class="mt-1 rounded-md border px-3 py-2 text-sm"
+                    title="Full Retirement Age — 67 if born 1960 or later, 66 for earlier births.">
+              {% for a in [66, 67] %}
+              <option value="{{ a }}" {% if (fra_age or 67) == a %}selected{% endif %}>{{ a }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        {# Spouse #}
+        <div class="text-xs font-semibold text-gray-500 mt-3 mb-1.5">Spouse's Social Security
+          <span class="text-gray-300 font-normal">— leave blank if single / no spousal benefit</span></div>
+        <div class="flex flex-wrap items-end gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Spouse Current Age</label>
+            <input type="number" name="spouse_current_age" form="mc-form"
+                   value="{{ spouse_current_age or '' }}" min="18" max="100" step="1" placeholder="e.g. 50"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-32">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Claiming Age</label>
+            <input type="number" name="spouse_claiming_age" form="mc-form"
+                   value="{{ spouse_claiming_age or '' }}" min="62" max="70" step="1" placeholder="62–70"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-28">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">
+              Est. Benefit <span class="text-gray-400 font-normal text-xs ml-1">$/mo at FRA</span>
+            </label>
+            <input type="number" name="spouse_monthly" form="mc-form"
+                   value="{{ spouse_monthly or '' }}" min="0" step="100" placeholder="blank = none"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Spouse FRA</label>
+            <select name="spouse_fra_age" form="mc-form" class="mt-1 rounded-md border px-3 py-2 text-sm">
+              {% for a in [66, 67] %}
+              <option value="{{ a }}" {% if (spouse_fra_age or 67) == a %}selected{% endif %}>{{ a }}</option>
+              {% endfor %}
+            </select>
+          </div>
         </div>
         <p class="text-xs text-gray-400 mt-2 max-w-3xl">
-          Enter your estimated monthly benefit at full retirement age (from your SSA statement). It's
-          adjusted for the claiming age you pick and applied as income from that age onward — so the
-          portfolio funds <strong>100% of spending during the pre-SSA bridge years</strong> and only
-          covers the remaining gap once Social Security begins.
+          Enter each person's estimated monthly benefit at their full retirement age (from the SSA
+          statement), adjusted for the claiming age you pick. The lower earner is automatically topped up
+          toward <strong>50% of the higher earner's benefit</strong> (spousal), the survivor keeps the
+          larger of the two, and the income bridge nets both streams against the pre-SSA gap. Set FRA to
+          66 for anyone born before 1960.
         </p>
       </div>
 
@@ -170,6 +222,62 @@
             Run Simulation
           </button>
         </div>
+      </div>
+
+      {# ── Income Bridge: account-type withdrawal sequencing ── #}
+      <div class="border-t border-gray-100 pt-4">
+        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+          Income Bridge
+          <span class="text-gray-300 font-normal ml-1">— which accounts fund the pre-SSA years</span>
+        </div>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+          <input type="checkbox" id="ib-toggle" name="income_bridge" value="true" form="mc-form"
+                 {% if income_bridge %}checked{% endif %} class="rounded border-gray-300">
+          Draw accounts in order <strong class="font-semibold">taxable → tax-deferred → Roth</strong> and apply withdrawal taxes
+        </label>
+        <div id="ib-opts" class="mt-3 flex flex-wrap items-end gap-4 {% if not income_bridge %}hidden{% endif %}">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Tax-Deferred Rate (%)
+              <span class="text-gray-400 font-normal text-xs ml-1">traditional / 401k</span></label>
+            <input type="number" name="deferred_tax_rate" form="mc-form"
+                   value="{{ deferred_tax_rate | int }}" min="0" max="50" step="1"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-36">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Taxable Rate (%)
+              <span class="text-gray-400 font-normal text-xs ml-1">cap-gains drag</span></label>
+            <input type="number" name="taxable_tax_rate" form="mc-form"
+                   value="{{ taxable_tax_rate | int }}" min="0" max="50" step="1"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-36">
+          </div>
+          <div class="basis-full h-0"></div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Taxable $
+              <span class="text-gray-400 font-normal text-xs">override</span></label>
+            <input type="number" name="bucket_taxable" form="mc-form"
+                   value="{{ bucket_taxable or '' }}" min="0" step="10000" placeholder="auto from accounts"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Tax-Deferred $
+              <span class="text-gray-400 font-normal text-xs">override</span></label>
+            <input type="number" name="bucket_traditional" form="mc-form"
+                   value="{{ bucket_traditional or '' }}" min="0" step="10000" placeholder="auto from accounts"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Roth $
+              <span class="text-gray-400 font-normal text-xs">override</span></label>
+            <input type="number" name="bucket_roth" form="mc-form"
+                   value="{{ bucket_roth or '' }}" min="0" step="10000" placeholder="auto from accounts"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
+          </div>
+        </div>
+        <p class="text-xs text-gray-400 mt-2 max-w-3xl">
+          Splits the portfolio into taxable, tax-deferred and Roth buckets and spends them in that order,
+          netting Social Security first. Tax-deferred withdrawals are grossed up by the rate above (so they
+          cost more to spend); Roth is tax-free. Leave the $ overrides blank to use your account balances.
+        </p>
       </div>
     </div>
 
@@ -351,8 +459,8 @@
             <div class="text-xs text-gray-400">over {{ r.withdrawal_years }} years{% if r.spending_pattern == 'smile' %} (smile-adjusted){% endif %}</div>
           </div>
         </div>
-        {# Social Security & income bridge #}
-        {% if r.ssa_annual_benefit %}
+        {# Social Security — single earner (household panel below covers couples) #}
+        {% if r.ssa_annual_benefit and not r.ssa_household %}
         <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 mb-3">
           <div class="flex items-center justify-between mb-1">
             <span class="text-xs font-semibold text-sky-700 uppercase tracking-wide">🏛️ Social Security</span>
@@ -376,6 +484,95 @@
           {% elif r.bridge_years == 0 %}
           <div class="text-xs text-gray-400 mt-1.5">Social Security is active from the first retirement year (no bridge gap).</div>
           {% endif %}
+        </div>
+        {% endif %}
+
+        {# Household Social Security — two earners (spousal + survivor) #}
+        {% if r.ssa_household %}
+        {% set hh = r.ssa_household %}
+        <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-sky-700 uppercase tracking-wide">👫 Household Social Security</span>
+            <span class="text-xs text-sky-600">combined <span class="bal">${{ "{:,.0f}".format(hh.combined_annual_benefit) }}</span>/yr</span>
+          </div>
+          <div class="space-y-1.5">
+            {% for p in hh.people %}
+            <div class="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5">
+              <div class="flex items-center gap-2">
+                <span class="font-medium text-gray-700">{{ p.label }}</span>
+                <span class="text-xs text-gray-400">claims {{ p.claiming_age }} · {{ (p.fra_factor * 100) | round | int }}% of FRA{% if p.fra_age != 67 %} · FRA {{ p.fra_age }}{% endif %}</span>
+              </div>
+              <div class="text-xs text-right">
+                <span class="bal font-semibold text-sky-700">${{ "{:,.0f}".format(p.monthly_benefit) }}</span>/mo{% if p.spousal_monthly_benefit and p.spousal_monthly_benefit > 0 %} <span class="text-emerald-600">(incl ${{ "{:,.0f}".format(p.spousal_monthly_benefit) }} spousal)</span>{% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% if r.bridge_years and r.bridge_years > 0 %}
+          <div class="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+            🌉 Bridge: the portfolio funds 100% of spending for the first
+            <strong>{{ r.bridge_years }}</strong> retirement year{{ 's' if r.bridge_years != 1 }} before the first Social Security check begins.
+          </div>
+          {% endif %}
+          <div class="text-xs text-gray-500 mt-2">
+            🕊️ If one spouse passes, the survivor keeps the larger benefit:
+            <span class="bal font-semibold text-gray-700">${{ "{:,.0f}".format(hh.survivor_annual_benefit) }}</span>/yr.
+          </div>
+        </div>
+        {% endif %}
+
+        {# Income Bridge — account drawdown order #}
+        {% if r.income_bridge %}
+        {% set ib = r.income_bridge %}
+        <div class="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-violet-700 uppercase tracking-wide">🏦 Income Bridge — drawdown order</span>
+            <span class="text-xs text-violet-500">taxable → tax-deferred → Roth</span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center mb-3">
+            <div class="bg-white rounded-lg p-2">
+              <div class="text-xs text-gray-500">Pre-SSA gap</div>
+              <div class="text-sm font-bold text-violet-700"><span class="bal">${{ "{:,.0f}".format(ib.gap_annual) }}</span>/yr</div>
+            </div>
+            <div class="bg-white rounded-lg p-2">
+              <div class="text-xs text-gray-500">Bridge to fund</div>
+              <div class="text-sm font-bold text-violet-700">{{ ib.bridge_years }} yr{{ 's' if ib.bridge_years != 1 }}</div>
+            </div>
+            <div class="bg-white rounded-lg p-2">
+              <div class="text-xs text-gray-500">Bridge capital</div>
+              <div class="text-sm font-bold text-violet-700"><span class="bal">${{ "{:,.0f}".format(ib.bridge_number) }}</span></div>
+            </div>
+            <div class="bg-white rounded-lg p-2">
+              <div class="text-xs text-gray-500">Lifetime taxes</div>
+              <div class="text-sm font-bold text-gray-700"><span class="bal">${{ "{:,.0f}".format(ib.taxes_total_median) }}</span></div>
+            </div>
+          </div>
+          <div class="space-y-1.5">
+            {% for b in ib.buckets %}
+            {% if b.start_balance and b.start_balance > 0 %}
+            <div class="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5">
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-2 h-2 rounded-full
+                  {% if b.bucket == 'taxable' %}bg-violet-400{% elif b.bucket == 'traditional' %}bg-amber-400{% else %}bg-emerald-400{% endif %}"></span>
+                <span class="font-medium text-gray-700">{{ b.label }}</span>
+                <span class="text-xs text-gray-400">start <span class="bal">${{ "{:,.0f}".format(b.start_balance) }}</span></span>
+              </div>
+              <div class="text-xs">
+                {% if b.depletes_year %}
+                  <span class="text-red-500">depletes yr {{ b.depletes_year }}{% if b.depletes_age %} · age {{ b.depletes_age }}{% endif %}</span>
+                {% else %}
+                  <span class="text-emerald-600">lasts the plan · ends <span class="bal">${{ "{:,.0f}".format(b.end_median) }}</span></span>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+          </div>
+          <div class="text-xs mt-2
+            {% if ib.bridge_coverage_pct >= 90 %}text-emerald-600{% elif ib.bridge_coverage_pct >= 70 %}text-amber-600{% else %}text-red-600{% endif %}">
+            {{ ib.bridge_coverage_pct }}% of simulations fund the full pre-SSA bridge without depleting · taxes at
+            {{ ib.deferred_tax_rate | int }}% deferred / {{ ib.taxable_tax_rate | int }}% taxable.
+          </div>
         </div>
         {% endif %}
 
@@ -707,6 +904,16 @@ new Chart(ctx, {
     if (!sel || !opts) return;
     function sync() { opts.classList.toggle('hidden', sel.value !== 'smile'); }
     sel.addEventListener('change', sync);
+    sync();
+})();
+
+// ── Income Bridge toggle ──────────────────────────────────────────────────────
+(function() {
+    const tog  = document.getElementById('ib-toggle');
+    const opts = document.getElementById('ib-opts');
+    if (!tog || !opts) return;
+    function sync() { opts.classList.toggle('hidden', !tog.checked); }
+    tog.addEventListener('change', sync);
     sync();
 })();
 </script>

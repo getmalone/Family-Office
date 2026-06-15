@@ -220,6 +220,77 @@ class MonteCarloResult(BaseModel):
     # Annual portfolio draw once SSA is flowing (median): spending need − SSA, floored at 0.
     net_draw_after_ssa: Decimal | None = None
 
+    # ── Income Bridge: account-level withdrawal sequencing ─────────────────────
+    # Populated only when the bridge is enabled and the portfolio has bucketed
+    # balances; otherwise None and the model is the single pooled portfolio.
+    income_bridge: "IncomeBridge | None" = None
+
+    # ── Household Social Security (two earners) ────────────────────────────────
+    # Populated when a spouse stream is supplied; otherwise the single ssa_*
+    # fields above describe the one modeled benefit.
+    ssa_household: "SsaHousehold | None" = None
+
+
+class BridgeBucket(BaseModel):
+    """One tax-treatment bucket in the Income Bridge withdrawal sequence."""
+    bucket: str                         # "taxable" | "traditional" | "roth"
+    label: str                          # display name, e.g. "Tax-Deferred"
+    start_balance: Decimal              # bucket value at the start of retirement (median)
+    end_median: Decimal                 # median bucket value at end of distribution
+    depletes_year: int | None = None    # plan-year (1-based in distribution) the median bucket hits 0; None = survives
+    depletes_age: int | None = None     # household age at depletion, if ages supplied
+
+
+class BridgeYearFunding(BaseModel):
+    """Median funding of one distribution year, by source (for the stacked view)."""
+    year: int                           # 1-based year within the distribution phase
+    age: int | None = None
+    ssa: Decimal                        # guaranteed income applied this year
+    taxable: Decimal                    # gross drawn from the taxable bucket
+    traditional: Decimal                # gross drawn from the tax-deferred bucket
+    roth: Decimal                       # gross drawn from the tax-free bucket
+
+
+class IncomeBridge(BaseModel):
+    """Account-level withdrawal sequencing answering 'which accounts fund the
+    pre-SSA years' — taxable → traditional → Roth, with a simple effective-tax
+    gross-up. All figures are medians across the simulation set."""
+    enabled: bool = True
+    buckets: list[BridgeBucket] = []
+    total_start: Decimal = Decimal("0")            # taxable+traditional+roth at retirement
+    # Gap & Bridge numbers
+    gap_annual: Decimal = Decimal("0")             # annual after-tax spend the portfolio covers during the bridge
+    bridge_years: int = 0                          # retirement years before SSA starts
+    bridge_number: Decimal = Decimal("0")          # total gross capital needed to fund the pre-SSA window
+    bridge_coverage_pct: Decimal = Decimal("0")    # % of sims that fund the full bridge without depleting
+    # Tax assumptions / outcome
+    deferred_tax_rate: Decimal = Decimal("0")      # effective rate on tax-deferred withdrawals (%)
+    taxable_tax_rate: Decimal = Decimal("0")       # effective cap-gains drag on taxable withdrawals (%)
+    taxes_total_median: Decimal = Decimal("0")     # median lifetime tax paid on portfolio withdrawals
+    funding_by_year: list[BridgeYearFunding] = []
+
+
+class SsaPerson(BaseModel):
+    """One earner's Social Security stream within a household."""
+    label: str                                       # "You" / "Spouse" (or a name)
+    monthly_fra: Decimal                             # entered benefit at this person's FRA
+    fra_age: int                                     # full retirement age used (66–67)
+    claiming_age: int                                # age this person claims (62–70)
+    fra_factor: float                                # claiming adjustment on their own record
+    own_monthly_benefit: Decimal                     # own benefit after the claiming factor
+    spousal_monthly_benefit: Decimal = Decimal("0")  # spousal top-up applied (lower earner only)
+    monthly_benefit: Decimal                         # total monthly once flowing (own + spousal top-up)
+    annual_benefit: Decimal
+    starts_plan_year: int | None = None              # distribution-year index their benefit starts (None = before retirement)
+
+
+class SsaHousehold(BaseModel):
+    """Two-earner Social Security with spousal and survivor benefits."""
+    people: list[SsaPerson] = []
+    combined_annual_benefit: Decimal = Decimal("0")  # household total once both streams are flowing
+    survivor_annual_benefit: Decimal = Decimal("0")  # what the survivor keeps (the larger single benefit)
+    first_benefit_plan_year: int | None = None       # distribution-year index the first SSA dollar arrives
+
 
 class MaxSpendingResult(BaseModel):
     """Highest sustainable spending for a target portfolio survival rate."""
@@ -238,3 +309,7 @@ class MonteCarloComparison(BaseModel):
     comparison_a: MonteCarloResult | None = None
     comparison_b: MonteCarloResult | None = None
     goal_amount: Decimal | None = None
+
+
+# Resolve the forward reference to IncomeBridge (defined after MonteCarloResult).
+MonteCarloResult.model_rebuild()
