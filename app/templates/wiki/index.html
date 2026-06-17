@@ -592,7 +592,20 @@ KFO_LLM_MODEL=claude-sonnet-4-5</code></pre>
       <tr><td class="mono">cusip / isin</td><td>String(20)</td><td>nullable — used for CIT identification</td></tr>
       <tr><td class="mono">is_publicly_traded</td><td>Boolean</td><td>False → skip yfinance; use manual price</td></tr>
       <tr><td class="mono">is_qsbs_eligible</td><td>Boolean</td><td>Tracks Section 1202 QSBS eligibility</td></tr>
-      <tr><td colspan="3" class="tag">asset_prices: one row per (asset_id, price_date). Unique constraint prevents duplicates. Source field: "yfinance", "manual", "fidelity_screenshot".</td></tr>
+      <tr><td colspan="3" class="tag">asset_prices: one row per (asset_id, price_date). Unique constraint prevents duplicates. Source field: "yfinance", "yfinance-backfill", "snapshot", "manual", "import".</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>price_snapshots — intraday readings</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">asset_id</td><td>FK → assets</td><td>indexed</td></tr>
+      <tr><td class="mono">price_date</td><td>Date</td><td>indexed</td></tr>
+      <tr><td class="mono">bucket</td><td>String(12)</td><td>premarket | morning | midday | evening (by ET wall-clock)</td></tr>
+      <tr><td class="mono">price</td><td>Numeric(18,6)</td><td></td></tr>
+      <tr><td class="mono">captured_at</td><td>DateTime</td><td>last update (ET)</td></tr>
+      <tr><td colspan="3" class="tag">Unique (asset_id, price_date, bucket). Unlike asset_prices (one daily close), this keeps several readings per day so the portfolio's change can be measured since the immediately preceding reading. See §11.</td></tr>
     </tbody>
   </table></div>
 
@@ -1003,8 +1016,19 @@ response = client.messages.create(
     </tbody>
   </table></div>
 
-  <h3>Portfolio Day Impact</h3>
-  <p>For each open lot, the service fetches today's price and yesterday's price from <code>asset_prices</code>, computes <code>day_change = (today - yesterday) / yesterday × 100</code>, and multiplies by market value to get the dollar impact. The portfolio total day P&amp;L is the sum of all position impacts.</p>
+  <h3>Portfolio Change — Intraday Snapshots</h3>
+  <p>The portfolio's headline change is measured against the <strong>immediately preceding reading</strong>, not a fixed "yesterday's close" — so it reads correctly even on a freshly imported portfolio that has no prior-day history. <code>SnapshotService</code> records a price reading per <code>(asset, day, session bucket)</code> — pre-market / morning / midday / evening, plus any manual refresh (repeat captures within a bucket update it in place):</p>
+  <ul>
+    <li><strong>Capture</strong> fires on every <strong>Refresh</strong> (<code>POST /prices/refresh</code> → <code>capture(force=True)</code>) and opportunistically when the app is opened and the latest reading is stale (&gt; 30 min).</li>
+    <li><strong>change_since_previous()</strong> compares the two most recent reading batches: morning vs the previous evening, midday vs morning, evening vs midday, a refresh vs whatever came right before it. The Daily-Brief hero shows "+$X (+Y%) since &lt;reading&gt;" with a strip of the day's readings.</li>
+  </ul>
+
+  <h3>Stable-Value Pricing (Cash)</h3>
+  <p>Cash and money-market holdings (<code>STABLE_VALUE_SYMBOLS</code> — <code>CASH</code>, <code>VMFXX</code>, <code>SWVXX</code>, …) are <strong>always $1.00</strong>. <code>get_current_price()</code> short-circuits these to $1 <em>before</em> consulting any stored/cached price, so a stale row can never over-value cash — a stray yfinance fetch once priced "CASH" as the PGIM Ultra Short Bond ETF (~$83). <code>repair_stable_value_prices()</code> additionally scrubs any stored stable-value rows back to $1 on startup and refresh (the morning brief, charts and day-change read <code>asset_prices</code> directly), and the importer pins stable-value to $1 so a bad price in an import file can't reintroduce it.</p>
+
+  <h3>Price-History Backfill &amp; Symbol Resolution</h3>
+  <p><code>MarketDataService.backfill_history()</code> does one bulk yfinance download of ~2 years of daily closes for every held public holding and persists the missing dates into <code>asset_prices</code> (idempotent), so trailing-window returns are instant/offline and the day-change has a real prior-day baseline. It runs once when history is thin — on refresh and via a gated startup task.</p>
+  <p><code>SymbolService</code> flags holdings that can't be priced — a <strong>CUSIP in the symbol field</strong> (e.g. a 401k fund imported as <code>31617E745</code>) or no price history — and best-effort maps the CUSIP to a real ticker via OpenFIGI (moving the CUSIP into <code>Asset.cusip</code>). The dashboard shows an amber banner with a "Map to tickers" button (<code>POST /prices/resolve-symbols</code>) and a manual-edit fallback.</p>
 
   <h3>Narrative Generation</h3>
   <p>The <code>_build_narrative()</code> method generates 5–7 English sentences covering:</p>
@@ -1094,6 +1118,9 @@ response = client.messages.create(
   <h3>Time-Weighted Return (TWR)</h3>
   <p><code>get_return_metrics()</code> chain-links daily sub-period returns (product of 1 + r_t) over 1-year, 3-year, 5-year, and since-inception windows, then annualises via <code>(cumulative + 1)^(1/years) − 1</code>. Requires holdings price history in the DB; private/illiquid positions are excluded. Results exposed at <code>GET /analysis/api/returns</code> and displayed in the "Return Metrics (TWR)" tab of the Risk page.</p>
 
+  <h3>Trailing-Window Performance (Dashboard)</h3>
+  <p><code>get_period_returns()</code> powers the dashboard <strong>Performance</strong> panel — the <strong>3-month / 6-month / 12-month / YTD</strong> total return of the current holdings, each as both a <strong>percentage and a dollar gain</strong>. Unlike the annualised TWR above, these are <em>cumulative</em> returns: each holding is valued buy-and-hold at its window-ago price vs. today's at current quantity (start<sub>i</sub> = mv<sub>i</sub> / (1 + cum<sub>i</sub>); gain = AUM − Σ start<sub>i</sub>). Cash, private, and positions without enough history for a window are held flat; a window with no qualifying history shows "—". History comes from the DB when dense enough, otherwise a single bulk yfinance download, and the result is cached ~60 min so the landing page stays responsive.</p>
+
   <h3>Monte Carlo Simulation — Two-Phase</h3>
   <p>Log-normal Geometric Brownian Motion (GBM) with annual steps, using Ito's lemma correction: <code>drift = μ − 0.5σ²</code>. Portfolio μ and σ are weighted-average asset-class parameters (uncorrelated assumption). The simulation runs two phases sequentially: <strong>Accumulation</strong> then optionally <strong>Distribution</strong>.</p>
 
@@ -1132,16 +1159,32 @@ for y in range(withdrawal_years):
   <p><strong>Survival rate</strong> = fraction of simulations where portfolio &gt; 0 at end of distribution phase. Color-coded: ≥90% green (highly sustainable), ≥70% amber (moderate risk), &lt;70% red (high ruin probability).</p>
 
   <h4>Retirement Timeline &amp; Social Security</h4>
-  <p>Optional age inputs make the projection age-aware. <code>current_age</code> + <code>retirement_age</code> drive the accumulation length (years = retirement − current). <code>ssa_claiming_age</code> (62–70) and <code>ssa_monthly_fra</code> (estimated benefit at Full Retirement Age 67) add Social Security as an <strong>income offset</strong> in the distribution phase.</p>
-  <p>The FRA estimate is adjusted for the claiming age via standard SSA rules (<code>_ssa_claiming_factor</code>): 62 ≈ 70%, 67 = 100%, 70 ≈ 124%. Each retirement year the smile-adjusted spending need is met by SSA <em>first</em>, and the portfolio draws only the remainder — so the pre-SSA years (the <strong>bridge</strong>) are funded 100% by the portfolio:</p>
-  <pre><code>ssa_per_year[y] = ssa_annual  if  retirement_age + y >= ssa_claiming_age  else 0
-spending_need   = annual_wdraw * smile_mults[y]
-portfolio_draw  = maximum(spending_need - ssa_per_year[y], 0.0)
-port_d = maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)</code></pre>
-  <p>The model is nominal (no COLA / inflation indexing, consistent with the flat-withdrawal design). Adding SSA raises the survival rate and shortens portfolio drawdown. Result fields: <code>ssa_claiming_age</code>, <code>ssa_monthly_benefit</code> / <code>ssa_annual_benefit</code> (claiming-adjusted), <code>ssa_fra_factor</code>, <code>ssa_total_benefit</code>, <code>bridge_years</code>, <code>net_draw_after_ssa</code>. The chart labels the x-axis by age and marks the SSA start year. Inputs flow via <code>/analysis/monte-carlo</code> query params.</p>
+  <p>Optional age inputs make the projection age-aware. <code>current_age</code> + <code>retirement_age</code> drive the accumulation length (years = retirement − current). <code>ssa_claiming_age</code> (62–70) and <code>ssa_monthly_fra</code> (estimated benefit at Full Retirement Age) add Social Security as an <strong>income offset</strong> in the distribution phase.</p>
+  <p>The FRA estimate is adjusted for the claiming age via standard SSA rules (<code>_ssa_claiming_factor</code>): 62 ≈ 70%, 67 = 100%, 70 ≈ 124%. Each retirement year the smile-adjusted spending need is met by SSA <em>first</em>, and the portfolio draws only the remainder — so the pre-SSA years (the <strong>bridge</strong>) are funded 100% by the portfolio. The model is nominal (no COLA / inflation indexing, consistent with the flat-withdrawal design); adding SSA raises the survival rate and shortens portfolio drawdown. The chart labels the x-axis by age and marks the first benefit year.</p>
+
+  <h5>Married-couple Social Security</h5>
+  <p><code>_household_ssa()</code> models <strong>two earners</strong> on their own age timelines — each with their own claiming age (62–70) and Full Retirement Age (66 or 67, selectable for pre-1960 births). It produces a per-year household benefit schedule that feeds the distribution loop:</p>
+  <ul>
+    <li><strong>Two streams.</strong> Each spouse claims at their own age with their own reduction / delayed-credit factor; the spouse is placed on the timeline via <code>spouse_current_age</code>.</li>
+    <li><strong>Spousal benefit.</strong> The lower earner is topped up toward <strong>50% of the higher earner's FRA benefit</strong> (<code>_ssa_spousal_factor</code> — reduced if claimed early, no delayed credit past FRA), payable only once <em>both</em> have claimed.</li>
+    <li><strong>Survivor benefit.</strong> Surfaced informationally as the larger of the two benefits (dynamic death/mortality is intentionally not modelled).</li>
+  </ul>
+  <p>Inputs via <code>/analysis/monte-carlo</code> query params: <code>ssa_monthly</code>, <code>ssa_claiming_age</code>, <code>fra_age</code>, <code>spouse_monthly</code>, <code>spouse_claiming_age</code>, <code>spouse_current_age</code>, <code>spouse_fra_age</code>. The result carries an <code>SsaHousehold</code> (per-person own/spousal/total, combined annual, survivor annual, first-benefit year) rendered as a "👫 Household Social Security" panel.</p>
+
+  <h4>Income Bridge — account-level withdrawal sequencing</h4>
+  <p>Opt-in (<code>income_bridge=true</code>; defaults off so the pooled model above is unchanged), <code>_run_income_bridge()</code> answers <em>which accounts fund the pre-SSA years</em>. It splits the portfolio into three tax buckets via <code>account.tax_bucket_for()</code> — <strong>taxable</strong> (brokerage / trust / bank), <strong>tax-deferred</strong> (traditional IRA, 401k) and <strong>tax-free</strong> (Roth, HSA, 529) — and draws each year's net spending need (after Social Security) in order <strong>taxable → tax-deferred → Roth</strong>, with a simple effective-tax gross-up:</p>
+  <pre><code>need = max(spending_need - ssa, 0)          # after-tax dollars the portfolio must deliver
+for bucket in (taxable, traditional, roth):  # in order
+    gross = min(bucket, need / (1 - rate))   # gross-up: tax-deferred ~18%, taxable ~10%, Roth 0%
+    bucket -= gross;  need -= gross * (1 - rate)</code></pre>
+  <p>Surfaced via the <code>IncomeBridge</code> schema and a violet "Income Bridge — drawdown order" panel: the annual <strong>Gap</strong> (spend the portfolio covers pre-SSA), the <strong>Bridge number</strong> (gross capital for the pre-SSA window), per-bucket start balances + depletion age, lifetime taxes, and bridge coverage %. API params: <code>income_bridge</code>, <code>deferred_tax_rate</code> / <code>taxable_tax_rate</code> (percent), and optional <code>bucket_taxable</code> / <code>bucket_traditional</code> / <code>bucket_roth</code> overrides (when supplied they drive the portfolio scale, useful before the real accounts are loaded).</p>
+
+  <h4>Max Sustainable Spending</h4>
+  <p>A follow-on solver (<code>solve_max_spending()</code>) binary-searches the withdrawal rate to find the highest spending that holds the portfolio's survival at a target rate (default 85%), reusing the current scenario's ages, Social Security, contributions and spending pattern. Exposed at <code>GET /analysis/api/max-spending</code> and rendered in-page below the Monte Carlo chart.</p>
+
   <div class="callout callout-warn">
     <span class="callout-icon">⚠️</span>
-    <div class="callout-body"><p><strong>Not yet modeled:</strong> per-account-type buckets (taxable / traditional / Roth) and withdrawal <em>sequencing</em>, taxes, Rule of 55, 72(t), Roth conversions, ACA/MAGI. SSA offsets the total draw but the engine is still a single pooled portfolio — this is the larger "Income Bridge Planner" roadmap item.</p></div>
+    <div class="callout-body"><p><strong>Still simplified (roadmap):</strong> the Income Bridge uses one effective tax rate per bucket — full federal brackets + SSA taxability (provisional income), Rule of 55, 72(t), Roth-conversion ladders and ACA/MAGI optimization, plus per-bucket allocations and a true money-weighted (transaction-aware) return, remain deferred.</p></div>
   </div>
 
   <h4>Chart — Retirement Anchor &amp; Phase Boundary</h4>
