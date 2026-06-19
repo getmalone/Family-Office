@@ -5,7 +5,7 @@ the write paths were fixed earlier, but the valuation lookup still trusted a
 stale cached price. These lock in $1 at the source.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.models.account import Account, AccountTypeEnum
@@ -64,6 +64,24 @@ def test_portfolio_values_cash_at_one(session):
 
     summary = PortfolioService(session).get_summary()
     assert summary.total_market_value == Decimal("9300.95")        # $1 × qty, not ~$772k
+
+
+def test_valuation_uses_stale_db_price_not_network(session, monkeypatch):
+    """A page render must NOT block on yfinance when the cache is stale — it
+    returns the most recent stored price (any age). This keeps pages responsive
+    and the local server reachable offline (otherwise the PWA shows 'offline')."""
+    a = Asset(symbol="VOO", name="Vanguard", asset_class=AssetClassEnum.US_EQUITY, is_publicly_traded=True)
+    session.add(a); session.flush()
+    # Only price on file is 10 days old (outside the 3-day "fresh" window).
+    session.add(AssetPrice(asset_id=a.id, price_date=date.today() - timedelta(days=10),
+                           close_price=Decimal("400"), source="yfinance"))
+    session.flush()
+
+    def _boom(self, asset):
+        raise AssertionError("get_current_price must not hit the network during render")
+    monkeypatch.setattr(MarketDataService, "_fetch_and_cache", _boom)
+
+    assert MarketDataService(session).get_current_price(a) == Decimal("400")
 
 
 def test_import_pins_stable_value_to_one(session):

@@ -12,7 +12,7 @@
  * Served from "/service-worker.js" so its scope covers the whole origin.
  */
 
-const VERSION = "kfo-v1";
+const VERSION = "kfo-v2";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
@@ -66,6 +66,26 @@ function isNetworkOnly(url) {
   return NETWORK_ONLY.some((p) => url.pathname.startsWith(p));
 }
 
+async function handleNavigation(request) {
+  // Try the network with a few quick retries before giving up — the local
+  // server is the source of truth and almost always up, so a transient failure
+  // (server briefly busy on a heavy page) shouldn't strand the user offline.
+  const delays = [0, 300, 700];
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i]) await new Promise((r) => setTimeout(r, delays[i]));
+    try {
+      const resp = await fetch(request);
+      caches.open(PAGE_CACHE).then((c) => c.put(request, resp.clone()));
+      return resp;
+    } catch (e) {
+      /* retry */
+    }
+  }
+  // Genuinely unreachable — serve this page's last cached copy, else the shell.
+  const cached = await caches.match(request);
+  return cached || caches.match("/offline");
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -74,21 +94,13 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
   if (isNetworkOnly(url)) return;
 
-  // Navigations (page loads): network-first with offline fallback.
+  // Navigations (page loads): network-first, but RESILIENT. The server is local,
+  // so a failed fetch is almost always a transient hiccup (the box was briefly
+  // busy rendering a heavy page) — not a real outage. Retry a few times with a
+  // short backoff before ever falling back to the cached copy, and only show the
+  // offline page as a true last resort.
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((resp) => {
-          const copy = resp.clone();
-          caches.open(PAGE_CACHE).then((c) => c.put(request, copy));
-          return resp;
-        })
-        .catch(() =>
-          caches
-            .match(request)
-            .then((cached) => cached || caches.match("/offline"))
-        )
-    );
+    event.respondWith(handleNavigation(request));
     return;
   }
 

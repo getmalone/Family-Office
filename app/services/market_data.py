@@ -46,6 +46,17 @@ class MarketDataService:
         if cached is not None:
             return cached
 
+        # 3-day cache miss: prefer the most recent stored price (any age) over a
+        # blocking yfinance call during a page render. This keeps pages responsive
+        # — and the server reachable — when offline or when prices are stale,
+        # instead of hanging per-holding (which is what dumps the PWA to its
+        # "You're offline" screen). Freshness comes from the explicit Refresh /
+        # snapshot capture / backfill paths; only hit the network when there is no
+        # stored price at all (a brand-new asset).
+        latest = self._get_latest_manual_price(asset.id)
+        if latest is not None:
+            return latest
+
         return self._fetch_and_cache(asset)
 
     def get_current_price_by_symbol(self, symbol: str) -> Decimal | None:
