@@ -59,21 +59,59 @@
                 <div class="flex h-16 items-center justify-between">
                     <div class="flex items-center">
                         <a href="/" class="text-white font-bold text-lg">Family Office</a>
-                        <div class="ml-10 flex items-baseline space-x-4">
-                            <a href="/" class="{% if page_title == 'Dashboard' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Dashboard</a>
+                        {% set pt = page_title | default('') %}
+                        {% set active_section =
+                           'portfolio' if (pt in ['Portfolio','New Trade','Accounts','Trends','Manage Accounts','Manage Assets'] or 'Edit' in pt)
+                           else 'analysis' if pt in ['Morning Brief','Analysis','Risk Analysis','Investment Profiles','Rebalance','Monte Carlo']
+                           else 'tax' if 'Tax' in pt
+                           else 'accounting' if ('Journal' in pt or 'Trial' in pt or 'Financial' in pt or 'Statement' in pt)
+                           else 'estate' if ('Ownership' in pt or 'Gift' in pt or 'GRAT' in pt)
+                           else 'reports' if pt == 'Reports'
+                           else 'approvals' if 'Approval' in pt
+                           else '' %}
+                        <div class="ml-8 flex items-baseline space-x-1">
+                            <a href="/" class="{% if pt == 'Dashboard' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Dashboard</a>
 
-                            <a href="/portfolio/" class="{% if page_title|default('') in ['Portfolio', 'New Trade', 'Accounts', 'Trends', 'Manage Accounts', 'Manage Assets'] or 'Edit' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Portfolio</a>
-                            <a href="/tax/summary" class="{% if 'Tax' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Tax</a>
-                            <a href="/accounting/journal" class="{% if 'Journal' in page_title|default('') or 'Trial' in page_title|default('') or 'Financial' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Accounting</a>
-                            <a href="/reports/" class="{% if page_title == 'Reports' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Reports</a>
-                            <a href="/estate/ownership" class="{% if 'Ownership' in page_title|default('') or 'Gift' in page_title|default('') or 'GRAT' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Estate</a>
-                            <a href="/analysis/morning" class="{% if page_title|default('') in ['Morning Brief', 'Analysis', 'Risk Analysis', 'Investment Profiles', 'Rebalance', 'Monte Carlo'] %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Analysis</a>
-                            <a href="/approvals/" class="{% if 'Approval' in page_title|default('') %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">
-                                Approvals
-                                {% if pending_approvals is defined and pending_approvals > 0 %}
-                                <span class="ml-1 inline-flex items-center rounded-full bg-red-500 px-2 py-0.5 text-xs font-medium text-white">{{ pending_approvals }}</span>
-                                {% endif %}
-                            </a>
+                            {% for key, label, href, items in [
+                                ('portfolio','Portfolio','/portfolio/',[('Holdings','/portfolio/'),('Accounts','/portfolio/accounts-view'),('Trends','/portfolio/trends'),('Trade','/portfolio/trade'),('-',''),('Manage Assets','/portfolio/assets'),('Manage Accounts','/portfolio/accounts')]),
+                                ('analysis','Analysis','/analysis/',[('Overview','/analysis/'),('Daily Brief','/analysis/morning'),('Risk','/analysis/risk'),('Rebalance','/analysis/rebalance'),('Monte Carlo','/analysis/monte-carlo'),('Profiles','/analysis/profiles')]),
+                                ('tax','Tax','/tax/summary',[('Summary','/tax/summary'),('Tax-Loss Harvesting','/tax/harvest'),('Elections','/tax/elections')]),
+                                ('accounting','Accounting','/accounting/journal',[('Journal','/accounting/journal'),('Trial Balance','/accounting/trial-balance'),('Financial Statements','/accounting/statements')]),
+                                ('estate','Estate','/estate/ownership',[('Ownership','/estate/ownership'),('Gifts','/estate/gifts'),('GRAT Modeling','/estate/grat')]),
+                            ] %}
+                            <div class="relative group">
+                                <a href="{{ href }}" class="inline-flex items-center gap-1 rounded-md px-3 py-2 text-sm font-medium {% if active_section == key %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %}">
+                                    {{ label }}
+                                    <svg class="w-3 h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                                </a>
+                                <div class="absolute left-0 top-full pt-1 hidden group-hover:block z-30 min-w-[13rem]">
+                                    <div class="rounded-md bg-white shadow-lg ring-1 ring-black/5 py-1">
+                                        {% for ilabel, ihref in items %}
+                                            {% if ilabel == '-' %}<div class="border-t border-gray-100 my-1"></div>
+                                            {% else %}<a href="{{ ihref }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900">{{ ilabel }}</a>{% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+
+                            <a href="/reports/" class="{% if active_section == 'reports' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %} rounded-md px-3 py-2 text-sm font-medium">Reports</a>
+
+                            <div class="relative group">
+                                <a href="/approvals/" class="inline-flex items-center gap-1 rounded-md px-3 py-2 text-sm font-medium {% if active_section == 'approvals' %}bg-slate-900 text-white{% else %}text-gray-300 hover:bg-slate-700 hover:text-white{% endif %}">
+                                    Approvals
+                                    {% if pending_approvals is defined and pending_approvals > 0 %}
+                                    <span class="inline-flex items-center rounded-full bg-red-500 px-2 py-0.5 text-xs font-medium text-white">{{ pending_approvals }}</span>
+                                    {% endif %}
+                                    <svg class="w-3 h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                                </a>
+                                <div class="absolute right-0 top-full pt-1 hidden group-hover:block z-30 min-w-[11rem]">
+                                    <div class="rounded-md bg-white shadow-lg ring-1 ring-black/5 py-1">
+                                        <a href="/approvals/" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900">Pending</a>
+                                        <a href="/approvals/history" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900">History</a>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <!-- Right side: offline indicator + privacy toggle -->
