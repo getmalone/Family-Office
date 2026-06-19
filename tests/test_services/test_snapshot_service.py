@@ -67,6 +67,8 @@ def test_single_reading_has_no_previous(session):
     session.add(voo); session.flush()
     _add_holding(session, voo, "100", "90")
     today = SnapshotService._now_et().date()
+    # Stored price so get_summary() values from the DB (no live yfinance call).
+    session.add(AssetPrice(asset_id=voo.id, price_date=today, close_price=Decimal("102"), source="test"))
     session.add(PriceSnapshot(asset_id=voo.id, price_date=today, bucket="morning",
                               price=Decimal("102"), captured_at=SnapshotService._now_et()))
     session.flush()
