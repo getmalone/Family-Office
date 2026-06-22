@@ -9,9 +9,10 @@ gain/loss identification.
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.asset import Asset, AssetPrice
+from app.models.asset import Asset, AssetClassEnum, AssetPrice
 from app.models.tax_lot import TaxLot
 
 
@@ -40,7 +41,17 @@ class MarketDataService:
             return Decimal("1")
 
         if not asset.is_publicly_traded or not asset.symbol:
-            return self._get_latest_manual_price(asset.id)
+            # Manually-priced holding (e.g. a 401k collective investment trust with
+            # no public ticker). If it has a price-proxy (look_through_ticker) and a
+            # manual base price, track the proxy's daily return from that base — so
+            # the holding moves day-to-day instead of sitting frozen — while staying
+            # anchored to the real unit value. Read-only (DB-first; no network).
+            base = self._get_latest_manual_price_row(asset.id)
+            if base is not None and asset.look_through_ticker:
+                ratio = self._proxy_ratio(asset.look_through_ticker, base[1])
+                if ratio is not None:
+                    return Decimal(str(round(float(base[0]) * ratio, 6)))
+            return base[0] if base is not None else None
 
         cached = self._get_cached_price(asset.id)
         if cached is not None:
@@ -121,6 +132,12 @@ class MarketDataService:
         dates into AssetPrice (idempotent). Powers real trailing-window returns and
         a robust prior-day baseline for the day-change."""
         assets = self._held_public_assets()
+        # Include price-proxy tickers so proxied holdings (401k CITs) get the
+        # history their ratio needs.
+        for psym in self._proxy_symbols_for_held():
+            ref = self._proxy_reference(psym, create=True)
+            if ref is not None and ref not in assets:
+                assets.append(ref)
         if not assets:
             return {"symbols": 0, "rows_added": 0}
 
@@ -218,15 +235,88 @@ class MarketDataService:
         )
         return price.close_price if price else None
 
-    def _get_latest_manual_price(self, asset_id: int) -> Decimal | None:
-        """Get the most recent manually entered price for private assets."""
-        price = (
+    def _get_latest_manual_price_row(self, asset_id: int):
+        """Most recent stored price as (close_price, price_date), or None."""
+        p = (
             self.session.query(AssetPrice)
             .filter(AssetPrice.asset_id == asset_id)
             .order_by(AssetPrice.price_date.desc())
             .first()
         )
-        return price.close_price if price else None
+        return (p.close_price, p.price_date) if p else None
+
+    def _get_latest_manual_price(self, asset_id: int) -> Decimal | None:
+        """Get the most recent manually entered price for private assets."""
+        row = self._get_latest_manual_price_row(asset_id)
+        return row[0] if row else None
+
+    # ── Price proxies (look_through_ticker) for untickered holdings (401k CITs) ──
+
+    def _proxy_reference(self, symbol: str, create: bool = False) -> "Asset | None":
+        """Asset that carries a price-proxy ticker's history. Prefers a real
+        holding with that symbol if one exists; otherwise an auto-created
+        reference asset (is_reference=True, no holdings)."""
+        sym = (symbol or "").upper().strip()
+        if not sym:
+            return None
+        existing = (
+            self.session.query(Asset)
+            .filter(func.upper(Asset.symbol) == sym)
+            .order_by(Asset.is_reference)   # real asset (False) sorts before reference (True)
+            .first()
+        )
+        if existing or not create:
+            return existing
+        ref = Asset(symbol=sym, name=f"(price proxy) {sym}",
+                    asset_class=AssetClassEnum.US_EQUITY, is_publicly_traded=True, is_reference=True)
+        self.session.add(ref)
+        self.session.flush()
+        return ref
+
+    def _proxy_ratio(self, proxy_symbol: str, base_date) -> float | None:
+        """proxy_latest_price / proxy_price_on_or_before(base_date), from stored
+        prices only (read-only). None if the proxy has no usable history yet."""
+        ref = self._proxy_reference(proxy_symbol, create=False)
+        if ref is None:
+            return None
+        latest = (
+            self.session.query(AssetPrice).filter(AssetPrice.asset_id == ref.id)
+            .order_by(AssetPrice.price_date.desc()).first()
+        )
+        base = (
+            self.session.query(AssetPrice)
+            .filter(AssetPrice.asset_id == ref.id, AssetPrice.price_date <= base_date)
+            .order_by(AssetPrice.price_date.desc()).first()
+        )
+        if latest and base and float(base.close_price) > 0:
+            return float(latest.close_price) / float(base.close_price)
+        return None
+
+    def _proxy_symbols_for_held(self) -> set[str]:
+        """look_through_tickers of held, manually-priced (untickered) holdings."""
+        held_ids = {
+            aid for (aid,) in self.session.query(TaxLot.asset_id)
+            .filter(TaxLot.is_closed == False).distinct()
+        }
+        if not held_ids:
+            return set()
+        out: set[str] = set()
+        for a in self.session.query(Asset).filter(Asset.id.in_(held_ids)).all():
+            if (not a.is_publicly_traded or not a.symbol) and a.look_through_ticker:
+                sym = a.look_through_ticker.upper().strip()
+                if sym and sym not in STABLE_VALUE_SYMBOLS:
+                    out.add(sym)
+        return out
+
+    def refresh_proxy_prices(self) -> int:
+        """Fetch today's price for each price-proxy ticker (creating the reference
+        asset if needed) so proxied holdings move on each refresh. Returns count."""
+        n = 0
+        for sym in self._proxy_symbols_for_held():
+            ref = self._proxy_reference(sym, create=True)
+            if ref and self._fetch_and_cache(ref) is not None:
+                n += 1
+        return n
 
     def _fetch_and_cache(self, asset: Asset) -> Decimal | None:
         """Fetch price from yfinance and store in cache."""

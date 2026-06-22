@@ -35,6 +35,7 @@ def refresh_prices(db: Session = Depends(get_db)):
         md.repair_stable_value_prices()   # scrub any stale CASH/money-market rows back to $1
         if md.history_is_thin():
             md.backfill_history()
+        md.refresh_proxy_prices()         # update price-proxy tickers (401k CIT tracking)
     except Exception:
         pass
 

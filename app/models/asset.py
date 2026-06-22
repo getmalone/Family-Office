@@ -40,11 +40,16 @@ class Asset(Base, TimestampMixin):
     sector: Mapped[str | None] = mapped_column(String(100), nullable=True)
     exchange: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_qsbs_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Optional public-market equivalent ticker used *only* for look-through HHI.
-    # Set this on institutional / pooled-class funds that mirror a publicly-listed
-    # fund (e.g. "Fidelity Contrafund Pool Cl F" → look_through_ticker="FCNTX").
-    # Does NOT affect price fetching — only the concentration analysis.
+    # Public-market equivalent ticker for institutional / pooled-class funds that
+    # mirror a publicly-listed fund (e.g. "Fidelity Contrafund Pool Cl F" →
+    # look_through_ticker="FCNTX"). Used for concentration look-through HHI AND,
+    # for NON-publicly-traded holdings with a manual base price, as a price PROXY:
+    # the holding's value tracks the proxy's daily return from the manual base
+    # (see MarketDataService.get_current_price). Lets 401k CITs move day-to-day.
     look_through_ticker: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Auto-created reference asset that only exists to carry a price proxy's
+    # history (it has no holdings). Excluded from portfolios and the asset list.
+    is_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class AssetPrice(Base):

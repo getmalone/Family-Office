@@ -356,7 +356,12 @@ def _asset_class_choices() -> list[tuple[str, str]]:
 @router.get("/assets")
 def assets_list(request: Request, db: Session = Depends(get_db)):
     """List all assets with add/edit controls."""
-    assets = db.query(Asset).order_by(Asset.symbol, Asset.name).all()
+    assets = (
+        db.query(Asset)
+        .filter(Asset.is_reference == False)   # hide auto-created price-proxy references
+        .order_by(Asset.symbol, Asset.name)
+        .all()
+    )
 
     return templates.TemplateResponse(
         "portfolio/assets.html",
@@ -426,6 +431,9 @@ def update_asset(
     is_publicly_traded: bool = Form(False),
     sector: str = Form(""),
     cusip: str = Form(""),
+    look_through_ticker: str = Form(""),
+    manual_price: str = Form(""),
+    manual_price_date: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Update an existing asset."""
@@ -439,5 +447,34 @@ def update_asset(
     asset.is_publicly_traded = is_publicly_traded
     asset.sector = sector.strip() or None
     asset.cusip = cusip.strip() or None
+    asset.look_through_ticker = look_through_ticker.upper().strip() or None
+
+    # Manual unit price (the base for proxy tracking). Stored as an AssetPrice row
+    # dated the "as of" date (defaults to today) so the proxy return is measured
+    # from there.
+    mp = manual_price.strip()
+    if mp:
+        try:
+            from datetime import date as _date
+            from decimal import Decimal as _Dec
+            from app.models.asset import AssetPrice
+            price = _Dec(mp)
+            try:
+                as_of = _date.fromisoformat(manual_price_date.strip()) if manual_price_date.strip() else _date.today()
+            except ValueError:
+                as_of = _date.today()
+            existing = (
+                db.query(AssetPrice)
+                .filter(AssetPrice.asset_id == asset.id, AssetPrice.price_date == as_of)
+                .first()
+            )
+            if existing:
+                existing.close_price = price
+                existing.source = "manual"
+            else:
+                db.add(AssetPrice(asset_id=asset.id, price_date=as_of, close_price=price, source="manual"))
+        except Exception:
+            pass
+
     db.flush()
     return RedirectResponse(url="/portfolio/assets", status_code=303)
