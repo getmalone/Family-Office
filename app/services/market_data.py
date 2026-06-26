@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.asset import Asset, AssetClassEnum, AssetPrice
 from app.models.tax_lot import TaxLot
+from app.services.render_guard import network_allowed
 
 
 # Symbols that are always $1.00 — never query yfinance for these.
@@ -83,12 +84,15 @@ class MarketDataService:
         # instead of hanging per-holding (which is what dumps the PWA to its
         # "You're offline" screen). Freshness comes from the explicit Refresh /
         # snapshot capture / backfill paths; only hit the network when there is no
-        # stored price at all (a brand-new asset).
+        # stored price at all (a brand-new asset) AND we're in an explicit-refresh
+        # context — never during an ordinary render.
         latest = self._get_latest_manual_price(asset.id)
         if latest is not None:
             return latest
 
-        return self._fetch_and_cache(asset)
+        if network_allowed():
+            return self._fetch_and_cache(asset)
+        return None
 
     def get_current_price_by_symbol(self, symbol: str) -> Decimal | None:
         """Look up asset by symbol and return current price."""

@@ -43,6 +43,13 @@
         /* Larger bal variants (2xl, 3xl headings) keep proportional dot size */
         .privacy-mode .bal-lg::after { font-size: 1.3rem; }
         .privacy-mode .bal-xl::after { font-size: 1.8rem; }
+
+        /* ── Click-to-sort table headers (static/js/table-sort.js) ── */
+        th.kfo-sort-th { cursor: pointer; user-select: none; -webkit-user-select: none; white-space: nowrap; }
+        th.kfo-sort-th:hover { background-color: rgba(0, 0, 0, 0.04); }
+        th.kfo-sort-th:focus-visible { outline: 2px solid #3b82f6; outline-offset: -2px; }
+        th.kfo-sort-th[aria-sort] { color: #1e293b; }
+        .kfo-sort-ind { font-size: 0.7em; opacity: 0.85; }
     </style>
     <!-- Apply privacy mode before first paint to avoid flash -->
     <script>
@@ -274,6 +281,8 @@
       }
     });
     </script>
+    <!-- Click-to-sort for every data table -->
+    <script src="/static/js/table-sort.js" defer></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

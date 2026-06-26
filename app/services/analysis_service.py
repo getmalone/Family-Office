@@ -42,6 +42,7 @@ from app.schemas.analysis import (
 )
 from app.services.market_data import MarketDataService, STABLE_VALUE_SYMBOLS
 from app.services.portfolio_service import PortfolioService
+from app.services.render_guard import network_allowed
 
 # Process-lifetime cache for trailing-window returns, refreshed hourly (the
 # dashboard's landing-page call must stay snappy; period returns barely move
@@ -485,9 +486,12 @@ class AnalysisService:
                     continue
                 results[sym] = rets
 
-        # Second: bulk-download remaining symbols from yfinance
+        # Second: bulk-download remaining symbols from yfinance — but ONLY in an
+        # explicit-refresh context. During an ordinary page render we never hit
+        # the network (it scales with portfolio size and would hang the page);
+        # symbols without stored history simply fall back to assumed returns.
         missing = [s for s in symbols if s not in results]
-        if missing:
+        if missing and network_allowed():
             try:
                 import yfinance as yf
                 raw = yf.download(
@@ -550,6 +554,12 @@ class AnalysisService:
 
         result: dict[str, dict[str, float]] = {}
         to_fetch = [s for s in symbols if s not in self._fund_holdings_cache]
+        # Each expansion is a separate yfinance call; with many funds this is the
+        # slowest thing on the risk page. Only reach out in an explicit-refresh
+        # context — a normal render uses whatever is already cached and skips the
+        # rest (less look-through detail, but no multi-second hang).
+        if not network_allowed():
+            to_fetch = []
 
         for sym in to_fetch:
             try:

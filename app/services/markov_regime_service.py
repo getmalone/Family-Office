@@ -208,6 +208,34 @@ class MarkovRegimeService:
         portfolio_regime = self._blend_portfolio_regime(ticker_returns, weights)
         return portfolio_regime, ticker_regimes
 
+    def portfolio_and_ticker_regimes_from_prices(
+        self,
+        price_map: "dict[str, np.ndarray]",
+        weights: dict[str, float],
+    ) -> tuple["RegimeState | None", "dict[str, RegimeState | None]"]:
+        """Same result as :meth:`get_portfolio_and_ticker_regimes`, but computed
+        entirely from pre-loaded close-price arrays (e.g. our stored 2-year
+        history) — **no network**. This is what page renders use; the live
+        download variant is reserved for explicit refreshes.
+
+        ``price_map`` maps symbol → close prices (oldest first, NaNs removed).
+        """
+        ticker_regimes: dict[str, RegimeState | None] = {s: None for s in price_map}
+        ticker_returns: dict[str, np.ndarray] = {}
+
+        for sym, prices in price_map.items():
+            try:
+                if prices is None or len(prices) < WINDOW + 10:
+                    continue
+                arr = np.asarray(prices, dtype=float)
+                ticker_regimes[sym] = self.get_regime(sym, prices=arr)
+                ticker_returns[sym] = np.diff(arr) / arr[:-1]
+            except Exception:
+                continue
+
+        portfolio_regime = self._blend_portfolio_regime(ticker_returns, weights)
+        return portfolio_regime, ticker_regimes
+
     def get_regime_batch(
         self,
         symbols: list[str],

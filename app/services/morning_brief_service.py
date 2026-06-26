@@ -163,10 +163,10 @@ class MorningBriefService:
         holdings_impact, portfolio_day = self._portfolio_day_impact(today, yesterday)
 
         # ── Markov regime detection (portfolio-blended) ───────────────────────
-        # One yfinance download (2y, period="2y") for all holding symbols.
-        # The *portfolio* regime is based on the market-value-weighted composite
-        # return series — not just SPY — so it reflects your actual allocation mix.
-        # Per-ticker regimes come from the same download at no extra cost.
+        # Computed from our STORED 2-year price history — no network on render.
+        # (The history is kept fresh by backfill / the Refresh button.) The
+        # *portfolio* regime uses the market-value-weighted composite return
+        # series — not just SPY — so it reflects your actual allocation mix.
         market_regime = None
         try:
             # Build symbol → weight map from holdings market values
@@ -181,9 +181,10 @@ class MorningBriefService:
             unique_syms = list(weights.keys())
 
             if unique_syms:
+                price_map = self._regime_price_map(unique_syms)
                 regime_svc = MarkovRegimeService()
-                portfolio_regime, ticker_regimes = regime_svc.get_portfolio_and_ticker_regimes(
-                    symbols=unique_syms,
+                portfolio_regime, ticker_regimes = regime_svc.portfolio_and_ticker_regimes_from_prices(
+                    price_map=price_map,
                     weights=weights,
                 )
                 market_regime = portfolio_regime
@@ -371,6 +372,26 @@ class MorningBriefService:
             "day_chg_pct": round(port_day_pct, 2),
             "up":          port_day_chg >= 0,
         }
+
+    def _regime_price_map(self, symbols: list[str]) -> dict[str, "np.ndarray"]:
+        """Stored ~2-year close-price series per symbol (oldest first), for the
+        Markov regime calc — DB only, one query, no network."""
+        if not symbols:
+            return {}
+        cutoff = date.today() - timedelta(days=760)   # ~2 trading years of calendar days
+        rows = (
+            self.session.query(Asset.symbol, AssetPrice.close_price)
+            .join(AssetPrice, AssetPrice.asset_id == Asset.id)
+            .filter(Asset.symbol.in_(symbols), AssetPrice.price_date >= cutoff)
+            .order_by(Asset.symbol, AssetPrice.price_date)
+            .all()
+        )
+        series: dict[str, list[float]] = {}
+        for sym, close in rows:
+            if close is None:
+                continue
+            series.setdefault(sym, []).append(float(close))
+        return {sym: np.array(vals, dtype=float) for sym, vals in series.items()}
 
     def _price_dict(self, asset_ids: list[int], target_date: date) -> dict[int, Decimal]:
         cutoff = target_date - timedelta(days=5)

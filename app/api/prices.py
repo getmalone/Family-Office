@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
 from app.models.asset import Asset, AssetPrice
+from app.services.render_guard import allow_network
 
 router = APIRouter()
 
@@ -27,22 +28,26 @@ def refresh_prices(db: Session = Depends(get_db)):
     from app.services.snapshot_service import SnapshotService
     from app.services.market_data import MarketDataService
 
-    # One-time: pull and store deep history so trailing-window returns are real
-    # and the day-change has a solid prior-day baseline. Idempotent + gated, so
-    # it only does heavy work on the first refresh after a fresh import.
-    try:
-        md = MarketDataService(db)
-        md.repair_stable_value_prices()   # scrub any stale CASH/money-market rows back to $1
-        if md.history_is_thin():
-            md.backfill_history()
-        md.refresh_proxy_prices()         # update price-proxy tickers (401k CIT tracking)
-    except Exception:
-        pass
+    # This is THE explicit refresh path — the one place we deliberately go to the
+    # network. allow_network() lifts the render guard so price fetching works
+    # (ordinary page renders stay DB-only and never block).
+    with allow_network():
+        # One-time: pull and store deep history so trailing-window returns are real
+        # and the day-change has a solid prior-day baseline. Idempotent + gated, so
+        # it only does heavy work on the first refresh after a fresh import.
+        try:
+            md = MarketDataService(db)
+            md.repair_stable_value_prices()   # scrub any stale CASH/money-market rows back to $1
+            if md.history_is_thin():
+                md.backfill_history()
+            md.refresh_proxy_prices()         # update price-proxy tickers (401k CIT tracking)
+        except Exception:
+            pass
 
-    try:
-        result = SnapshotService(db).capture(force=True)
-    except ImportError:
-        return JSONResponse({"error": "yfinance not installed"}, status_code=500)
+        try:
+            result = SnapshotService(db).capture(force=True)
+        except ImportError:
+            return JSONResponse({"error": "yfinance not installed"}, status_code=500)
 
     # Bust the morning brief cache so the next page load reflects the new prices.
     try:
@@ -61,12 +66,13 @@ def resolve_symbols(db: Session = Depends(get_db)):
     from app.services.symbol_service import SymbolService
     from app.services.market_data import MarketDataService
 
-    report = SymbolService(db).resolve_and_fix()
-    if report.get("resolved"):
-        try:
-            MarketDataService(db).backfill_history()
-        except Exception:
-            pass
+    with allow_network():
+        report = SymbolService(db).resolve_and_fix()
+        if report.get("resolved"):
+            try:
+                MarketDataService(db).backfill_history()
+            except Exception:
+                pass
     return JSONResponse(report)
 
 

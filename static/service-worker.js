@@ -12,7 +12,7 @@
  * Served from "/service-worker.js" so its scope covers the whole origin.
  */
 
-const VERSION = "kfo-v2";
+const VERSION = "kfo-v3";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
@@ -24,6 +24,7 @@ const PRECACHE_URLS = [
   "/static/vendor/chart.umd.min.js",
   "/static/css/app.css",
   "/static/js/charts.js",
+  "/static/js/table-sort.js",
   "/static/icons/app-icon.svg",
   "/manifest.webmanifest",
 ];
