@@ -13,7 +13,7 @@ from app.models.asset import Asset, AssetClassEnum, AssetPrice
 from app.models.tax_lot import TaxLot
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.services.import_service import import_positions_csv
-from app.services.market_data import MarketDataService
+from app.services.market_data import MarketDataService, is_cash_asset
 from app.services.portfolio_service import PortfolioService
 
 
@@ -82,6 +82,48 @@ def test_valuation_uses_stale_db_price_not_network(session, monkeypatch):
     monkeypatch.setattr(MarketDataService, "_fetch_and_cache", _boom)
 
     assert MarketDataService(session).get_current_price(a) == Decimal("400")
+
+
+def test_is_cash_asset_detection():
+    def fake(symbol=None, asset_class=AssetClassEnum.US_EQUITY, name="X"):
+        return Asset(symbol=symbol, asset_class=asset_class, name=name, is_publicly_traded=True)
+    assert is_cash_asset(fake(symbol="CASH"))                      # stable-value symbol
+    assert is_cash_asset(fake(symbol="VMFXX"))                     # money-market ticker
+    assert is_cash_asset(fake(asset_class=AssetClassEnum.CASH))    # classed cash
+    assert is_cash_asset(fake(name="Cash - Savings"))             # name starts with cash
+    assert is_cash_asset(fake(name="CASH & Cash Investments"))
+    assert not is_cash_asset(fake(symbol="AAPL", name="Apple Inc."))
+    assert not is_cash_asset(fake(name="JPMorgan Cash Flow Fund"))  # 'cash' mid-name → not cash
+
+
+def test_misclassified_unpriced_cash_values_at_book_not_minus_100(session):
+    """The messy-import case: cash with no symbol, mis-classed us_equity, and NO
+    stored price must value at book (0% return), never −100%."""
+    cash = Asset(id=1, symbol=None, name="CASH - Contributory",
+                 asset_class=AssetClassEnum.US_EQUITY, is_publicly_traded=False)
+    acct = Account(id=1, name="Contributory", account_type=AccountTypeEnum.BROKERAGE, is_taxable=True)
+    session.add_all([cash, acct]); session.flush()
+    txn = Transaction(account_id=1, asset_id=1, transaction_type=TransactionTypeEnum.BUY,
+                      transaction_date=date(2023, 1, 1), quantity=Decimal("9807"), price_per_unit=Decimal("1"),
+                      total_amount=Decimal("9807"), fees=Decimal("0"))
+    session.add(txn); session.flush()
+    session.add(TaxLot(account_id=1, asset_id=1, acquisition_date=date(2023, 1, 1), acquisition_transaction_id=txn.id,
+                       original_quantity=Decimal("9807"), remaining_quantity=Decimal("9807"),
+                       cost_basis_per_unit=Decimal("1"), original_cost_basis_per_unit=Decimal("1")))
+    # A corrupt yfinance row (yesterday + today) must not leak into value or day-change.
+    session.add(AssetPrice(asset_id=1, price_date=date.today() - timedelta(days=1),
+                           close_price=Decimal("83.03"), source="yfinance"))
+    session.add(AssetPrice(asset_id=1, price_date=date.today(),
+                           close_price=Decimal("83.50"), source="yfinance"))
+    session.flush()
+
+    h = PortfolioService(session).get_summary().holdings[0]
+    assert h.market_value == Decimal("9807")
+    assert h.unrealized_gain_loss == Decimal("0")
+    assert h.unrealized_pct == Decimal("0")
+    assert h.day_change == Decimal("0")               # not (1 − 83) × 9807
+    # Cash ignores the yfinance rows entirely → book value of $1/unit.
+    assert MarketDataService(session).get_current_price(cash) == Decimal("1")
 
 
 def test_import_pins_stable_value_to_one(session):

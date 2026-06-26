@@ -18,7 +18,7 @@ from app.models.asset import Asset, AssetPrice
 from app.models.tax_lot import TaxLot, TaxLotDisposal, WashSaleAdjustment
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.portfolio import HoldingDetail, PortfolioSummary, TradeResult
-from app.services.market_data import MarketDataService
+from app.services.market_data import MarketDataService, is_cash_asset
 
 
 class PortfolioService:
@@ -86,15 +86,23 @@ class PortfolioService:
             cost_basis = sum(lot.remaining_quantity * lot.cost_basis_per_unit for lot in lot_group)
 
             current_price = self.market_data.get_current_price(asset) or Decimal("0")
-            market_value = quantity * current_price
-            unrealized = market_value - cost_basis
+            if is_cash_asset(asset):
+                # Cash is book value — it has no market gain/loss. Pin market to
+                # cost so a missing price can never render it as a −100% "loss".
+                market_value = cost_basis
+                current_price = (cost_basis / quantity) if quantity else Decimal("1")
+                unrealized = Decimal("0")
+            else:
+                market_value = quantity * current_price
+                unrealized = market_value - cost_basis
             unrealized_pct = (unrealized / cost_basis * 100) if cost_basis else Decimal("0")
 
-            # Day change: (today_price - prior_close) * quantity
+            # Day change: (today_price - prior_close) * quantity. Cash never moves
+            # (and a stale corrupt prior-close must not fabricate one).
             prior_price = prior_price_map.get(asset_id)
             pos_day_change = (
                 (current_price - prior_price) * quantity
-                if prior_price and current_price
+                if prior_price and current_price and not is_cash_asset(asset)
                 else Decimal("0")
             )
 

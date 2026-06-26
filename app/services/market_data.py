@@ -24,6 +24,21 @@ STABLE_VALUE_SYMBOLS = {
 }
 
 
+def is_cash_asset(asset) -> bool:
+    """True for literal cash / a cash sweep — value it at book, NEVER as a
+    tradeable security. Detected three ways so a messy import can't slip cash
+    through as a stock: a stable-value symbol, asset_class == cash, or a name
+    that starts with "cash" (e.g. "Cash & Cash Investments", "Cash - Savings")."""
+    sym = (getattr(asset, "symbol", None) or "").upper().strip()
+    if sym in STABLE_VALUE_SYMBOLS:
+        return True
+    ac = getattr(asset, "asset_class", None)
+    ac = ac.value if hasattr(ac, "value") else str(ac or "")
+    if ac == "cash":
+        return True
+    return (getattr(asset, "name", None) or "").strip().lower().startswith("cash")
+
+
 class MarketDataService:
     """Fetches and caches market prices for publicly traded assets."""
 
@@ -33,12 +48,17 @@ class MarketDataService:
 
     def get_current_price(self, asset: Asset) -> Decimal | None:
         """Get the most recent price for an asset, fetching from yfinance if stale."""
-        # Stable-value holdings (cash, money markets) are ALWAYS $1.00. Short-circuit
-        # before consulting any stored/cached price so a stale bad row can never
-        # over-value cash — once, a stray yfinance fetch priced "CASH" as the PGIM
-        # Ultra Short Bond ETF (~$83), and the cache would otherwise keep returning it.
-        if asset.symbol and asset.symbol.upper() in STABLE_VALUE_SYMBOLS:
-            return Decimal("1")
+        # Literal cash / sweeps are book value — never a tradeable security.
+        # Short-circuit before any cached price or yfinance call so cash can't be
+        # over-valued (a stray fetch once priced "CASH" as the PGIM ETF at ~$83)
+        # OR under-valued to $0 (a missing price → a bogus −100% loss). Returns the
+        # stored unit value if present (e.g. a lump-sum savings balance), else $1.
+        if is_cash_asset(asset):
+            # Honor only a deliberately ENTERED unit value (source="manual", e.g. a
+            # savings balance set in the edit form). A stray yfinance/snapshot row
+            # must never win here — that's exactly how "CASH" once priced as the
+            # PGIM ETF (~$83). No manual price → book value of $1/unit.
+            return self._get_latest_manual_price(asset.id, source="manual") or Decimal("1")
 
         if not asset.is_publicly_traded or not asset.symbol:
             # Manually-priced holding (e.g. a 401k collective investment trust with
@@ -235,19 +255,18 @@ class MarketDataService:
         )
         return price.close_price if price else None
 
-    def _get_latest_manual_price_row(self, asset_id: int):
-        """Most recent stored price as (close_price, price_date), or None."""
-        p = (
-            self.session.query(AssetPrice)
-            .filter(AssetPrice.asset_id == asset_id)
-            .order_by(AssetPrice.price_date.desc())
-            .first()
-        )
+    def _get_latest_manual_price_row(self, asset_id: int, source: str | None = None):
+        """Most recent stored price as (close_price, price_date), or None.
+        Pass source="manual" to consider only deliberately entered prices."""
+        q = self.session.query(AssetPrice).filter(AssetPrice.asset_id == asset_id)
+        if source is not None:
+            q = q.filter(AssetPrice.source == source)
+        p = q.order_by(AssetPrice.price_date.desc()).first()
         return (p.close_price, p.price_date) if p else None
 
-    def _get_latest_manual_price(self, asset_id: int) -> Decimal | None:
+    def _get_latest_manual_price(self, asset_id: int, source: str | None = None) -> Decimal | None:
         """Get the most recent manually entered price for private assets."""
-        row = self._get_latest_manual_price_row(asset_id)
+        row = self._get_latest_manual_price_row(asset_id, source=source)
         return row[0] if row else None
 
     # ── Price proxies (look_through_ticker) for untickered holdings (401k CITs) ──
