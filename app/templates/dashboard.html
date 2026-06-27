@@ -124,7 +124,11 @@
                 </div>
                 {% else %}
                 <div class="mt-1 text-2xl font-bold text-gray-300">—</div>
+                {% if history_building %}
+                <div class="text-xs text-blue-400 animate-pulse">building price history…</div>
+                {% else %}
                 <div class="text-xs text-gray-400">not enough history</div>
+                {% endif %}
                 {% endif %}
             </div>
             {% endfor %}

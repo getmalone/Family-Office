@@ -79,8 +79,19 @@ async def import_csv(
     raw = (await file.read()).decode("utf-8-sig", errors="replace")
     try:
         result = import_positions_data(db, raw, filename=file.filename)
+        db.commit()   # persist before the backfill worker opens its own session
     except Exception as exc:  # noqa: BLE001
+        db.rollback()
         return RedirectResponse(url=f"/settings/?err=Import+failed:+{exc}", status_code=303)
+
+    # Pull ~2 years of price history for the newly imported holdings in the
+    # background so the trailing-window Performance panel (3M/6M/12M/YTD) fills
+    # in. Non-blocking — the import response returns immediately.
+    try:
+        from app.services.backfill_worker import ensure_history
+        ensure_history(force=True)
+    except Exception:
+        pass
     summary = (
         f"Imported {result['positions']} positions ({result.get('format', '').upper()}) — "
         f"{result['accounts']} new accounts, {result['assets']} new securities."

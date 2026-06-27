@@ -50,6 +50,12 @@ from app.services.render_guard import network_allowed
 _PERIOD_RETURNS_CACHE: dict[str, list[dict]] = {}
 
 
+def invalidate_period_returns_cache() -> None:
+    """Drop the trailing-window cache so the next dashboard load recomputes —
+    called after a price-history backfill fills in new dates."""
+    _PERIOD_RETURNS_CACHE.clear()
+
+
 # Assumed annual return and volatility per asset class (used for private assets
 # without price history, and as fallback for Monte Carlo simulation).
 ASSET_CLASS_ASSUMPTIONS: dict[str, dict[str, float]] = {

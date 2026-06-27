@@ -62,6 +62,18 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     except Exception:
         period_returns = []
 
+    # If the windows are empty because the price history is still thin, kick a
+    # background backfill (guarded + cooldown'd, so cheap to call every load) and
+    # tell the panel to show "building…" instead of "not enough history".
+    history_building = False
+    try:
+        if any(not r.get("available") for r in period_returns):
+            from app.services import backfill_worker
+            backfill_worker.ensure_history()
+            history_building = backfill_worker.is_running()
+    except Exception:
+        history_building = False
+
     # Holdings that can't be priced (CUSIP-as-symbol or unknown ticker) — surfaced
     # so the user can map them to real tickers. Cheap DB-only check (no network).
     try:
@@ -81,6 +93,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             "tax_summary": tax_summary,
             "pending_approvals": pending_count,
             "period_returns": period_returns,
+            "history_building": history_building,
             "unpriceable": unpriceable,
             "page_title": "Dashboard",
         },
