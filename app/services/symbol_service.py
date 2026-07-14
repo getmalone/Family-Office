@@ -9,7 +9,6 @@ free OpenFIGI mapping API, moving the CUSIP into the dedicated ``cusip`` field.
 from __future__ import annotations
 
 import json
-import re
 import urllib.request
 
 from sqlalchemy.orm import Session
@@ -17,16 +16,13 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset, AssetPrice
 from app.models.tax_lot import TaxLot
 from app.services.market_data import STABLE_VALUE_SYMBOLS
+from app.services.symbols import (  # noqa: F401 — looks_like_cusip re-exported
+    looks_like_cusip,
+    looks_like_rollup,
+    yahoo_symbol,
+)
 
-_CUSIP_RE = re.compile(r"^[A-Z0-9]{9}$")
 _OPENFIGI_URL = "https://api.openfigi.com/v3/mapping"
-
-
-def looks_like_cusip(symbol: str | None) -> bool:
-    """A 9-character alphanumeric containing a digit — a CUSIP, not a ticker
-    (tickers are short and almost never 9 chars with digits)."""
-    s = (symbol or "").upper().strip()
-    return bool(_CUSIP_RE.match(s)) and any(c.isdigit() for c in s)
 
 
 class SymbolService:
@@ -48,11 +44,12 @@ class SymbolService:
         return [a for a in assets if (a.symbol or "").upper() not in STABLE_VALUE_SYMBOLS]
 
     def unpriceable_assets(self) -> list[Asset]:
-        """Held public holdings that can't be priced: a CUSIP-like symbol, or no
-        price history at all."""
+        """Held public holdings that can't be priced: a symbol no feed can resolve
+        (a CUSIP, a broker subtotal row like ``CRM-TOTAL``, or otherwise malformed),
+        or no price history at all."""
         out = []
         for a in self._held_public_assets():
-            if looks_like_cusip(a.symbol):
+            if yahoo_symbol(a.symbol) is None:
                 out.append(a)
                 continue
             has_price = (

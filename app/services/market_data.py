@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset, AssetClassEnum, AssetPrice
 from app.models.tax_lot import TaxLot
 from app.services.render_guard import network_allowed
+from app.services.symbols import yahoo_symbol
 
 
 # Symbols that are always $1.00 — never query yfinance for these.
@@ -165,8 +166,17 @@ class MarketDataService:
         if not assets:
             return {"symbols": 0, "rows_added": 0}
 
-        sym_to_id = {a.symbol: a.id for a in assets}
+        # Key by the Yahoo-safe ticker (BRK/B → BRK-B) and drop anything no feed
+        # can resolve (CUSIPs, broker subtotal rows) — querying those just fails
+        # noisily on every run. The returned columns come back in this same form.
+        sym_to_id: dict[str, int] = {}
+        for a in assets:
+            ysym = yahoo_symbol(a.symbol)
+            if ysym is not None:
+                sym_to_id[ysym] = a.id
         symbols = list(sym_to_id.keys())
+        if not symbols:
+            return {"symbols": 0, "rows_added": 0}
         start = date.today() - timedelta(days=int(months * 31))
 
         try:
@@ -206,7 +216,11 @@ class MarketDataService:
                 ))
                 existing.add(d)
                 rows_added += 1
-        self.session.flush()
+            # Commit per symbol. SQLite allows a single writer, so holding one
+            # transaction across thousands of rows made every other writer wait out
+            # the whole backfill and time out with "database is locked". This is a
+            # backfill — partial progress is fine, and it's idempotent on re-run.
+            self.session.commit()
         return {"symbols": len(symbols), "rows_added": rows_added}
 
     def repair_stable_value_prices(self) -> int:
@@ -351,10 +365,14 @@ class MarketDataService:
         if asset.symbol.upper() in STABLE_VALUE_SYMBOLS:
             return self._get_latest_manual_price(asset.id) or Decimal("1")
 
+        ysym = yahoo_symbol(asset.symbol)   # BRK/B → BRK-B; None for CUSIP/junk
+        if ysym is None:
+            return None
+
         try:
             import yfinance as yf
 
-            ticker = yf.Ticker(asset.symbol)
+            ticker = yf.Ticker(ysym)
             hist = ticker.history(period="2d")
             if hist.empty:
                 return None

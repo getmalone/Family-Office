@@ -37,12 +37,12 @@ def morning_brief(
         from app.services.morning_brief_service import invalidate_brief_cache
         invalidate_brief_cache()
     else:
-        # Opportunistic capture on open — internally throttled so it only hits
-        # the network when the latest reading is stale (>30 min).
-        try:
-            snap.capture(force=False)
-        except Exception:
-            pass
+        # Opportunistic capture on open — kicked to a background thread. Doing it
+        # inline meant a quote fetch per held symbol plus writes DURING the render:
+        # slow, and it fought the backfill for the SQLite write lock (a lock or
+        # duplicate error left this request's session un-committable → 500).
+        from app.services.backfill_worker import ensure_capture
+        ensure_capture()
 
     svc = MorningBriefService(db)
     try:

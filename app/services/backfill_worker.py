@@ -37,6 +37,13 @@ _last_result: dict | None = None
 # portfolio whose symbols have no public price history).
 _COOLDOWN = timedelta(minutes=20)
 
+# Opportunistic snapshot capture ("what's it worth right now") runs on the same
+# background footing — see ensure_capture().
+_capture_lock = threading.Lock()
+_capture_running = False
+_capture_last: datetime | None = None
+_CAPTURE_COOLDOWN = timedelta(minutes=10)
+
 
 def is_running() -> bool:
     return _running
@@ -100,6 +107,47 @@ def ensure_history(force: bool = False) -> bool:
                 _running = False
 
     threading.Thread(target=_worker, name="kfo-backfill", daemon=True).start()
+    return True
+
+
+def capture_is_running() -> bool:
+    return _capture_running
+
+
+def ensure_capture(force: bool = False) -> bool:
+    """Kick an opportunistic price-snapshot capture in the background.
+
+    This used to run inline on the Daily Brief render, which was a disaster: it
+    fetches a quote per held symbol (hundreds of sequential round-trips) and then
+    WRITES, so a page load fought the backfill for the SQLite write lock. A
+    'database is locked' or duplicate-row error there poisoned the request's
+    session and 500'd the whole page. Renders now read stored data only; the
+    capture happens out here where a failure costs nothing.
+    """
+    global _capture_running
+    now = datetime.now()
+    with _capture_lock:
+        if _capture_running:
+            return False
+        if not force and _capture_last and (now - _capture_last) < _CAPTURE_COOLDOWN:
+            return False
+        _capture_running = True
+
+    def _worker():
+        global _capture_running, _capture_last
+        try:
+            from app.services.snapshot_service import SnapshotService
+            with get_db_session(get_factory()) as s:
+                with allow_network():
+                    SnapshotService(s).capture(force=force)
+        except Exception:
+            pass  # opportunistic — never escalate
+        finally:
+            _capture_last = datetime.now()
+            with _capture_lock:
+                _capture_running = False
+
+    threading.Thread(target=_worker, name="kfo-capture", daemon=True).start()
     return True
 
 
