@@ -51,6 +51,19 @@ class Asset(Base, TimestampMixin):
     # history (it has no holdings). Excluded from portfolios and the asset list.
     is_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # ── Symbol-resolution state (see services/symbol_service.py) ──────────────
+    # Where the current symbol came from when the resolver rewrote it
+    # (e.g. "openfigi:31617E745", "yahoo-search:name", "user-confirmed") — audit
+    # trail so an automatic mapping is never mistaken for imported data.
+    resolution_source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # "no_listing" — every resolution avenue came up empty; almost certainly a
+    # CIT / unlisted fund. The resolver skips these on later runs and the UI
+    # points at the price-proxy flow instead of retrying forever.
+    resolution_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # A medium-confidence candidate awaiting the user's one-click confirmation.
+    suggested_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    suggested_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
 
 class AssetPrice(Base):
     """Daily closing price cache for publicly traded assets."""

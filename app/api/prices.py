@@ -60,20 +60,42 @@ def refresh_prices(db: Session = Depends(get_db)):
 
 
 @router.post("/resolve-symbols")
-def resolve_symbols(db: Session = Depends(get_db)):
-    """Map CUSIP-symbol holdings to real tickers (via OpenFIGI) so they price
-    correctly, then backfill their history. Returns a resolved/unresolved report."""
+def resolve_symbols(force: bool = False, db: Session = Depends(get_db)):
+    """Run the ticker-resolution pipeline over unpriceable holdings: verify the
+    current symbol, map CUSIPs via OpenFIGI, then search Yahoo by security name
+    (auto-applying only high-confidence, price-validated matches; storing the
+    rest as one-click suggestions; flagging provable dead ends "no_listing").
+    Backfills history for anything that resolved. ``force=true`` re-checks
+    holdings previously flagged no_listing."""
     from app.services.symbol_service import SymbolService
     from app.services.market_data import MarketDataService
 
     with allow_network():
-        report = SymbolService(db).resolve_and_fix()
+        report = SymbolService(db).resolve_and_fix(force=force)
         if report.get("resolved"):
             try:
                 MarketDataService(db).backfill_history()
             except Exception:
                 pass
     return JSONResponse(report)
+
+
+@router.post("/apply-suggestion")
+def apply_suggestion(asset_id: int, db: Session = Depends(get_db)):
+    """Apply a stored ticker suggestion (user clicked accept on the dashboard
+    banner), then backfill the renamed holding's history so it prices now."""
+    from app.services.symbol_service import SymbolService
+    from app.services.market_data import MarketDataService
+
+    with allow_network():
+        result = SymbolService(db).apply_suggestion(asset_id)
+        if result is None:
+            return JSONResponse({"error": "no suggestion stored for this asset"}, status_code=404)
+        try:
+            MarketDataService(db).backfill_history()
+        except Exception:
+            pass
+    return JSONResponse(result)
 
 
 @router.get("/status")

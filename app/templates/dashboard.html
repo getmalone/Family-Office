@@ -28,40 +28,85 @@
         <div>
           <div class="text-sm font-semibold text-amber-800">⚠️ {{ unpriceable|length }} holding{{ 's' if unpriceable|length != 1 }} can't be priced</div>
           <div class="text-xs text-amber-700 mt-0.5">
-            Their symbol is a CUSIP or unknown ticker, so they show $0 P&amp;L and are held flat in returns:
-            {% for u in unpriceable[:6] %}<span class="font-mono">{{ u.symbol }}</span> ({{ u.name[:24] }}){% if not loop.last %}, {% endif %}{% endfor %}{% if unpriceable|length > 6 %} +{{ unpriceable|length - 6 }} more{% endif %}.
+            They show $0 P&amp;L and are held flat in returns. "Find tickers" checks the
+            security directory and searches by name; sure matches apply automatically,
+            close ones appear below for your confirmation.
           </div>
         </div>
         <div class="flex items-center gap-3">
           <button type="button" id="fix-tickers-btn" onclick="resolveSymbols()"
-                  class="bg-amber-600 text-white rounded-md px-4 py-2 text-sm hover:bg-amber-700 whitespace-nowrap">Map to tickers</button>
+                  class="bg-amber-600 text-white rounded-md px-4 py-2 text-sm hover:bg-amber-700 whitespace-nowrap">Find tickers</button>
           <a href="/portfolio/assets" class="text-xs text-amber-700 underline whitespace-nowrap">edit manually</a>
         </div>
       </div>
+      <ul class="mt-2 space-y-1">
+        {% for u in unpriceable[:8] %}
+        <li class="text-xs text-amber-800 flex items-center gap-2 flex-wrap">
+          <span class="font-mono font-semibold">{{ u.symbol }}</span>
+          <span class="text-amber-700">{{ u.name[:40] }}</span>
+          {% if u.suggested_symbol %}
+            <span class="text-amber-700">→ suggested <span class="font-mono font-semibold">{{ u.suggested_symbol }}</span>{% if u.suggested_note %} · {{ u.suggested_note }}{% endif %}</span>
+            <button type="button" onclick="applySuggestion({{ u.id }}, this)"
+                    class="bg-emerald-600 text-white rounded px-2 py-0.5 text-xs hover:bg-emerald-700">Use {{ u.suggested_symbol }}</button>
+          {% elif u.status == 'no_listing' %}
+            <span class="text-amber-700 italic">no public listing found — likely a CIT/unlisted fund;
+              <a href="/portfolio/assets" class="underline">set a price proxy</a></span>
+          {% endif %}
+        </li>
+        {% endfor %}
+        {% if unpriceable|length > 8 %}<li class="text-xs text-amber-700">+{{ unpriceable|length - 8 }} more…</li>{% endif %}
+      </ul>
       <div id="fix-tickers-result" class="text-xs mt-2"></div>
     </div>
     <script>
     async function resolveSymbols() {
       const btn = document.getElementById('fix-tickers-btn');
       const out = document.getElementById('fix-tickers-result');
-      btn.disabled = true; btn.textContent = 'Mapping…';
+      btn.disabled = true; btn.textContent = 'Searching…';
       try {
         const r = await fetch('/prices/resolve-symbols', { method: 'POST' });
         const d = await r.json();
-        const n = (d.resolved || []).length;
-        if (n > 0) {
+        const nRes = (d.resolved || []).length, nSug = (d.suggested || []).length,
+              nNo = (d.no_listing || []).length;
+        if (nRes > 0 || nSug > 0) {
           out.className = 'text-xs mt-2 text-emerald-700';
-          out.textContent = `Mapped ${n} holding${n!==1?'s':''} to tickers — reloading…`;
+          const bits = [];
+          if (nRes) bits.push(`${nRes} mapped automatically`);
+          if (nSug) bits.push(`${nSug} suggestion${nSug!==1?'s':''} to review`);
+          out.textContent = bits.join(', ') + ' — reloading…';
           setTimeout(() => location.reload(), 900);
+        } else if (nNo > 0) {
+          out.className = 'text-xs mt-2 text-amber-700';
+          out.textContent = `No listed ticker exists for ${nNo} holding${nNo!==1?'s':''} — set a price proxy via “edit manually” — reloading…`;
+          setTimeout(() => location.reload(), 1600);
         } else {
           out.className = 'text-xs mt-2 text-amber-700';
-          out.textContent = 'No CUSIPs could be auto-mapped. Use “edit manually” to set the correct ticker.';
-          btn.disabled = false; btn.textContent = 'Map to tickers';
+          out.textContent = 'No matches found. Use “edit manually” to set the correct ticker.';
+          btn.disabled = false; btn.textContent = 'Find tickers';
         }
       } catch (_) {
         out.className = 'text-xs mt-2 text-red-600';
-        out.textContent = 'Could not reach the mapping service. Try again or edit manually.';
-        btn.disabled = false; btn.textContent = 'Map to tickers';
+        out.textContent = 'Could not reach the lookup services. Try again or edit manually.';
+        btn.disabled = false; btn.textContent = 'Find tickers';
+      }
+    }
+    async function applySuggestion(assetId, btn) {
+      const out = document.getElementById('fix-tickers-result');
+      btn.disabled = true; btn.textContent = 'Applying…';
+      try {
+        const r = await fetch(`/prices/apply-suggestion?asset_id=${assetId}`, { method: 'POST' });
+        const d = await r.json();
+        if (r.ok) {
+          out.className = 'text-xs mt-2 text-emerald-700';
+          out.textContent = `${d.from} → ${d.ticker} applied — reloading…`;
+          setTimeout(() => location.reload(), 900);
+        } else {
+          throw new Error(d.error || 'failed');
+        }
+      } catch (_) {
+        out.className = 'text-xs mt-2 text-red-600';
+        out.textContent = 'Could not apply the suggestion. Try “edit manually”.';
+        btn.disabled = false;
       }
     }
     </script>

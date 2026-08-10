@@ -76,10 +76,19 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
     # Holdings that can't be priced (CUSIP-as-symbol or unknown ticker) — surfaced
     # so the user can map them to real tickers. Cheap DB-only check (no network).
+    # Carries any stored resolver state so the banner can offer a one-click
+    # suggestion or point no-listing holdings at the price-proxy flow.
     try:
         from app.services.symbol_service import SymbolService
         unpriceable = [
-            {"symbol": a.symbol, "name": a.name}
+            {
+                "id": a.id,
+                "symbol": a.symbol,
+                "name": a.name,
+                "status": a.resolution_status,
+                "suggested_symbol": a.suggested_symbol,
+                "suggested_note": a.suggested_note,
+            }
             for a in SymbolService(db).unpriceable_assets()
         ]
     except Exception:

@@ -84,9 +84,14 @@ def test_unpriceable_detects_cusip_and_no_price(session):
 
 def test_resolve_and_fix_maps_cusip_to_ticker(session):
     a = _hold(session, 1, "31617E745")
-    with patch.object(SymbolService, "_openfigi_map", staticmethod(lambda cusips: {"31617E745": "CRM"})):
+    with (
+        patch.object(SymbolService, "_openfigi_map", staticmethod(lambda cusips: {"31617E745": "CRM"})),
+        patch.object(SymbolService, "_prices_ok", lambda self, s: s == "CRM"),
+    ):
         report = SymbolService(session).resolve_and_fix()
-    assert report["resolved"] == [{"cusip": "31617E745", "ticker": "CRM", "name": a.name}]
+    assert report["resolved"] == [
+        {"from": "31617E745", "ticker": "CRM", "name": a.name, "via": "openfigi"}
+    ]
     assert a.symbol == "CRM" and a.cusip == "31617E745"   # CUSIP preserved in its own field
 
 
