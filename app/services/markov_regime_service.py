@@ -33,6 +33,7 @@ from datetime import date
 import numpy as np
 
 from app.schemas.analysis import RegimeState, RegimeTransition
+from app.services.symbols import yahoo_symbol
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -162,10 +163,20 @@ class MarkovRegimeService:
         ticker_regimes: dict[str, RegimeState | None] = {s: None for s in symbols}
         ticker_returns: dict[str, np.ndarray] = {}
 
+        # Fetch by the Yahoo-safe form and drop the unpriceable (a CUSIP from a
+        # 401(k) import, a subtotal row). Sending them raw meant every call
+        # errored per junk symbol — and holdings stored as BRK/B never priced at
+        # all, because Yahoo only answers for BRK-B. Results stay keyed by the
+        # caller's original symbols.
+        originals_by_ysym = self._yahoo_map(symbols)
+        if not originals_by_ysym:
+            return None, ticker_regimes
+
         try:
             import yfinance as yf
+            fetch_syms = list(originals_by_ysym)
             raw = yf.download(
-                symbols,
+                fetch_syms,
                 period="2y",
                 auto_adjust=True,
                 progress=False,
@@ -176,12 +187,12 @@ class MarkovRegimeService:
 
             close = raw["Close"] if "Close" in raw.columns else raw
 
-            for sym in symbols:
+            for ysym, origs in originals_by_ysym.items():
                 try:
                     if hasattr(close, "columns"):
-                        if sym not in close.columns:
+                        if ysym not in close.columns:
                             continue
-                        col = close[sym].dropna()
+                        col = close[ysym].dropna()
                     else:
                         # Single-ticker edge case
                         col = close.dropna()
@@ -190,13 +201,13 @@ class MarkovRegimeService:
                         continue
 
                     prices = np.array(col.values, dtype=float)
-
-                    # Per-ticker regime
-                    ticker_regimes[sym] = self.get_regime(sym, prices=prices)
-
-                    # Save daily returns for portfolio blending
                     rets = np.diff(prices) / prices[:-1]
-                    ticker_returns[sym] = rets
+
+                    for sym in origs:
+                        # Per-ticker regime
+                        ticker_regimes[sym] = self.get_regime(sym, prices=prices)
+                        # Save daily returns for portfolio blending
+                        ticker_returns[sym] = rets
 
                 except Exception:
                     continue
@@ -251,10 +262,13 @@ class MarkovRegimeService:
             return {}
 
         results: dict[str, RegimeState | None] = {s: None for s in symbols}
+        originals_by_ysym = self._yahoo_map(symbols)
+        if not originals_by_ysym:
+            return results
         try:
             import yfinance as yf
             raw = yf.download(
-                symbols,
+                list(originals_by_ysym),
                 period="2y",
                 auto_adjust=True,
                 progress=False,
@@ -265,12 +279,12 @@ class MarkovRegimeService:
 
             close = raw["Close"] if "Close" in raw.columns else raw
 
-            for sym in symbols:
+            for ysym, origs in originals_by_ysym.items():
                 try:
                     if hasattr(close, "columns"):
-                        if sym not in close.columns:
+                        if ysym not in close.columns:
                             continue
-                        col = close[sym].dropna()
+                        col = close[ysym].dropna()
                     else:
                         # Single-ticker download returns a Series, not a DataFrame
                         col = close.dropna()
@@ -279,11 +293,12 @@ class MarkovRegimeService:
                         continue
 
                     prices = np.array(col.values, dtype=float)
-                    results[sym] = self.get_regime(
-                        sym,
-                        lookback_days=lookback_days,
-                        prices=prices,
-                    )
+                    for sym in origs:
+                        results[sym] = self.get_regime(
+                            sym,
+                            lookback_days=lookback_days,
+                            prices=prices,
+                        )
                 except Exception:
                     continue
 
@@ -293,6 +308,20 @@ class MarkovRegimeService:
         return results
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _yahoo_map(symbols: list[str]) -> "dict[str, list[str]]":
+        """Yahoo-safe fetch symbol → the original symbols it answers for.
+
+        ``BRK/B`` and ``BRK.B`` both fetch as ``BRK-B`` (one download, both keys
+        get results); CUSIPs and other junk normalise to None and are dropped.
+        """
+        out: dict[str, list[str]] = {}
+        for sym in symbols:
+            ysym = yahoo_symbol(sym)
+            if ysym is not None:
+                out.setdefault(ysym, []).append(sym)
+        return out
 
     def _blend_portfolio_regime(
         self,
@@ -342,9 +371,12 @@ class MarkovRegimeService:
 
     def _fetch_prices(self, symbol: str, lookback_days: int) -> np.ndarray | None:
         """Fetch close prices for a single symbol via yfinance."""
+        ysym = yahoo_symbol(symbol)
+        if ysym is None:
+            return None
         try:
             import yfinance as yf
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(ysym)
             hist = ticker.history(period="2y")
             if hist.empty or len(hist) < WINDOW + 10:
                 return None

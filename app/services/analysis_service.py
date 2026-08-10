@@ -43,6 +43,7 @@ from app.schemas.analysis import (
 from app.services.market_data import MarketDataService, STABLE_VALUE_SYMBOLS
 from app.services.portfolio_service import PortfolioService
 from app.services.render_guard import network_allowed
+from app.services.symbols import yahoo_symbol
 
 # Process-lifetime cache for trailing-window returns, refreshed hourly (the
 # dashboard's landing-page call must stay snappy; period returns barely move
@@ -496,12 +497,21 @@ class AnalysisService:
         # explicit-refresh context. During an ordinary page render we never hit
         # the network (it scales with portfolio size and would hang the page);
         # symbols without stored history simply fall back to assumed returns.
-        missing = [s for s in symbols if s not in results]
-        if missing and network_allowed():
+        # Fetch by the Yahoo-safe form (BRK/B → BRK-B) and skip symbols no feed
+        # can resolve (CUSIPs, subtotal rows) — they can only fail noisily.
+        missing_by_ysym: dict[str, list[str]] = {}
+        for s in symbols:
+            if s in results:
+                continue
+            ysym = yahoo_symbol(s)
+            if ysym is not None:
+                missing_by_ysym.setdefault(ysym, []).append(s)
+        if missing_by_ysym and network_allowed():
             try:
                 import yfinance as yf
+                fetch_syms = list(missing_by_ysym)
                 raw = yf.download(
-                    missing,
+                    fetch_syms,
                     start=str(start_date),
                     end=str(end_date),
                     auto_adjust=True,
@@ -511,19 +521,21 @@ class AnalysisService:
                 if not raw.empty:
                     close = raw["Close"] if "Close" in raw.columns else raw
                     if hasattr(close, "columns"):
-                        for sym in missing:
-                            if sym in close.columns:
-                                col = close[sym].dropna()
+                        for ysym, origs in missing_by_ysym.items():
+                            if ysym in close.columns:
+                                col = close[ysym].dropna()
                                 if len(col) >= 10:
                                     p = col.values
-                                    results[sym] = np.diff(p) / p[:-1]
+                                    for sym in origs:
+                                        results[sym] = np.diff(p) / p[:-1]
                     else:
                         # Single ticker — close is a Series
-                        if len(missing) == 1:
+                        if len(fetch_syms) == 1:
                             col = close.dropna()
                             if len(col) >= 10:
                                 p = col.values
-                                results[missing[0]] = np.diff(p) / p[:-1]
+                                for sym in missing_by_ysym[fetch_syms[0]]:
+                                    results[sym] = np.diff(p) / p[:-1]
             except Exception:
                 pass
 
@@ -568,8 +580,12 @@ class AnalysisService:
             to_fetch = []
 
         for sym in to_fetch:
+            ysym = yahoo_symbol(sym)
+            if ysym is None:   # CUSIP / junk — a fund lookup can only 404
+                self._fund_holdings_cache[sym] = {}
+                continue
             try:
-                fd = yf.Ticker(sym).funds_data
+                fd = yf.Ticker(ysym).funds_data
                 th = fd.top_holdings if fd is not None else None
                 if th is not None and not th.empty and "Holding Percent" in th.columns:
                     holdings: dict[str, float] = {}
@@ -918,6 +934,7 @@ class AnalysisService:
         if not regime_override:
             try:
                 from app.services.markov_regime_service import MarkovRegimeService
+                from app.services.market_data import stored_price_map
                 symbols = [h.symbol for h in summary.holdings if h.symbol]
                 weights = {
                     h.symbol: float(h.market_value) / initial_value
@@ -925,8 +942,16 @@ class AnalysisService:
                     if h.symbol and float(h.market_value) > 0
                 }
                 if symbols:
-                    regime, _ = MarkovRegimeService().get_portfolio_and_ticker_regimes(
-                        symbols=symbols, weights=weights
+                    # Stored history only — same source the morning brief uses.
+                    # This used to be a live 2-year yf.download of every raw
+                    # holding symbol on each Monte Carlo render, which hammered
+                    # Yahoo (rate limits → "possibly delisted" for the whole
+                    # portfolio) and errored per CUSIP/BRK-slash symbol. The
+                    # backfill keeps this history fresh; if it's still thin the
+                    # regime is simply None → unconditioned simulation.
+                    price_map = stored_price_map(self.session, symbols)
+                    regime, _ = MarkovRegimeService().portfolio_and_ticker_regimes_from_prices(
+                        price_map=price_map, weights=weights
                     )
                     return regime
             except Exception:

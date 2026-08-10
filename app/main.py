@@ -83,6 +83,13 @@ async def wiki():
 @app.on_event("startup")
 def startup():
     """Initialize the database, seed system defaults, and load app settings."""
+    # yfinance logs a multi-line error per failed symbol — up to a full Yahoo
+    # error page each — so one rate-limited batch floods the console. Quote
+    # failures are handled app-side (unpriceable holdings are surfaced in
+    # Settings, the brief shows an outage note), so keep the client quiet.
+    import logging
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
     init_db()
     try:
         from app.services.db import get_factory

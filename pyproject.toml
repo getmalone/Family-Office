@@ -1,6 +1,6 @@
 [project]
 name = "family-office"
-version = "0.1.15"
+version = "0.1.16"
 description = """
 A Family Office agentic AI system — a production-ready multi-agent platform
 for autonomous wealth management, tax optimization, accounting, compliance, and
@@ -26,7 +26,10 @@ dependencies = [
     "langchain-openai>=0.3",
     "pandas>=2.2",
     "numpy>=2.0",
-    "yfinance>=0.2",
+    # Floor at 1.5.2: Yahoo's mid-2026 endpoint changes broke older clients —
+    # wholesale "possibly delisted; no price data found" for every valid ticker.
+    # The floor forces stale installs forward on their next `uv sync`.
+    "yfinance>=1.5.2",
     "httpx>=0.28",
     "python-dotenv>=1.0",
     # Cap below 49: cryptography 49 dropped x86_64 macOS wheels (arm64-only),

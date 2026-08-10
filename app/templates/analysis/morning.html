@@ -43,6 +43,15 @@
         {{ brief.as_of }}
         {% if brief.fetched_at %}&nbsp;·&nbsp; data as of {{ brief.fetched_at }}{% endif %}
       </p>
+      {% if brief.market_note %}
+      <p class="mt-1 text-xs text-amber-600 flex items-center gap-1">
+        <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M12 9v3m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        </svg>
+        {{ brief.market_note }}
+      </p>
+      {% endif %}
       {% if brief.next_update %}
       <p class="mt-0.5 text-xs text-gray-400">{{ brief.next_update }}
         &nbsp;·&nbsp;

@@ -9,6 +9,7 @@ gain/loss identification.
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import numpy as np
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,29 @@ def is_cash_asset(asset) -> bool:
     if ac == "cash":
         return True
     return (getattr(asset, "name", None) or "").strip().lower().startswith("cash")
+
+
+def stored_price_map(session: Session, symbols: list[str]) -> dict[str, np.ndarray]:
+    """Stored ~2-year close-price series per symbol (oldest first) — DB only,
+    one query, no network. Feeds the Markov regime calc so page renders and
+    Monte Carlo runs reuse the history the backfill already downloaded instead
+    of re-fetching 2 years of quotes per request."""
+    if not symbols:
+        return {}
+    cutoff = date.today() - timedelta(days=760)   # ~2 trading years of calendar days
+    rows = (
+        session.query(Asset.symbol, AssetPrice.close_price)
+        .join(AssetPrice, AssetPrice.asset_id == Asset.id)
+        .filter(Asset.symbol.in_(symbols), AssetPrice.price_date >= cutoff)
+        .order_by(Asset.symbol, AssetPrice.price_date)
+        .all()
+    )
+    series: dict[str, list[float]] = {}
+    for sym, close in rows:
+        if close is None:
+            continue
+        series.setdefault(sym, []).append(float(close))
+    return {sym: np.array(vals, dtype=float) for sym, vals in series.items()}
 
 
 class MarketDataService:

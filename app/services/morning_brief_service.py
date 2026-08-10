@@ -36,9 +36,18 @@ _CLOSE_CUTOFF = time(16, 5)   # 4:05 PM ET — market close + 5 min buffer
 
 _brief_cache: dict[str, dict] = {}   # session_key → brief dict
 
+# Last good quote per market symbol, kept across sessions. When Yahoo
+# rate-limits a batch (some or all of the 21 index/sector tickers come back
+# empty — "possibly delisted" in the logs), the brief fills the gaps from here
+# and says so, instead of caching a blank market section for the whole AM/PM
+# session. In-process only; a restart starts clean.
+_last_good_market: dict[str, dict] = {}
+_last_good_at: datetime | None = None
+
 
 def invalidate_brief_cache() -> None:
-    """Clear the brief cache so the next page load rebuilds with fresh prices."""
+    """Clear the brief cache so the next page load rebuilds with fresh prices.
+    (Deliberately keeps ``_last_good_market`` — it's a fallback, not a cache.)"""
     _brief_cache.clear()
 
 
@@ -157,6 +166,29 @@ class MorningBriefService:
         market_symbols = list(INDICES.keys()) + list(SECTORS.keys())
         market_data    = self._fetch_market_snapshots(market_symbols)
 
+        # A rate-limited/blocked quote comes back *missing*, never wrong. Fill
+        # each gap with the symbol's last good quote so one bad batch doesn't
+        # blank the market section; flag it so the header can say so.
+        global _last_good_at
+        market_note = None
+        prev_good_at = _last_good_at
+        if market_data:
+            _last_good_market.update(market_data)
+            _last_good_at = now_et
+        filled = [s for s in market_symbols
+                  if s not in market_data and s in _last_good_market]
+        for s in filled:
+            market_data[s] = _last_good_market[s]
+        if filled:
+            stamp = (f" (from {prev_good_at.strftime('%a %-I:%M %p ET')})"
+                     if prev_good_at else "")
+            market_note = ("Some market quotes couldn't refresh — showing last "
+                           f"available prices{stamp}.")
+        elif not market_data:
+            market_note = ("Market quotes are currently unavailable (provider "
+                           "rate limit or offline). Portfolio figures below use "
+                           "stored prices.")
+
         indices_data = self._build_index_rows(market_data)
         sectors_data = self._build_sector_rows(market_data)
 
@@ -217,6 +249,7 @@ class MorningBriefService:
             "portfolio_day":   portfolio_day,
             "narrative":       narrative,
             "market_regime":   market_regime,   # RegimeState | None
+            "market_note":     market_note,     # staleness/outage notice | None
         }
 
     # ── Market data ───────────────────────────────────────────────────────────
@@ -376,22 +409,8 @@ class MorningBriefService:
     def _regime_price_map(self, symbols: list[str]) -> dict[str, "np.ndarray"]:
         """Stored ~2-year close-price series per symbol (oldest first), for the
         Markov regime calc — DB only, one query, no network."""
-        if not symbols:
-            return {}
-        cutoff = date.today() - timedelta(days=760)   # ~2 trading years of calendar days
-        rows = (
-            self.session.query(Asset.symbol, AssetPrice.close_price)
-            .join(AssetPrice, AssetPrice.asset_id == Asset.id)
-            .filter(Asset.symbol.in_(symbols), AssetPrice.price_date >= cutoff)
-            .order_by(Asset.symbol, AssetPrice.price_date)
-            .all()
-        )
-        series: dict[str, list[float]] = {}
-        for sym, close in rows:
-            if close is None:
-                continue
-            series.setdefault(sym, []).append(float(close))
-        return {sym: np.array(vals, dtype=float) for sym, vals in series.items()}
+        from app.services.market_data import stored_price_map
+        return stored_price_map(self.session, symbols)
 
     def _price_dict(self, asset_ids: list[int], target_date: date) -> dict[int, Decimal]:
         cutoff = target_date - timedelta(days=5)
