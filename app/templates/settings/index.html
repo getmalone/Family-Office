@@ -114,12 +114,19 @@ async function checkUpdates() {
   const btn = document.getElementById('check-updates-btn');
   el.textContent = 'Checking…'; btn.disabled = true;
   try {
-    const d = await (await fetch('/settings/check-updates')).json();
-    if (!d.is_git) {
-      el.textContent = 'Manual updates (not a git install) — current v' + d.current + '.';
-    } else if (d.update_available) {
-      el.innerHTML = '⬆️ Update available: <b>v' + d.current + ' → ' + d.latest +
-        '</b>. Quit and relaunch the app to apply.';
+    const d = await (await fetch('/settings/check-updates', {cache: 'no-store'})).json();
+    if (d.update_available) {
+      if (d.is_git) {
+        el.innerHTML = '⬆️ Update available: <b>v' + d.current + ' → ' + d.latest +
+          '</b>. Quit and relaunch the app to apply.';
+      } else {
+        el.innerHTML = '⬆️ <b>' + d.latest + '</b> is available (you have v' + d.current + '). ' +
+          '<button type="button" id="apply-update-btn" onclick="applyUpdate()" ' +
+          'class="ml-1 bg-emerald-600 text-white rounded-md px-3 py-1 text-sm hover:bg-emerald-700">' +
+          'Download &amp; install</button>';
+      }
+    } else if (!d.is_git && !d.latest) {
+      el.textContent = 'Could not reach GitHub Releases to check — try again shortly.';
     } else {
       el.textContent = '✓ Up to date (v' + d.current + ').';
     }
@@ -127,6 +134,25 @@ async function checkUpdates() {
     el.textContent = 'Could not check for updates (offline?).';
   }
   btn.disabled = false;
+}
+
+async function applyUpdate() {
+  const el = document.getElementById('update-result');
+  const btn = document.getElementById('apply-update-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Installing… (about a minute)'; }
+  try {
+    const r = await fetch('/settings/apply-update', {method: 'POST', cache: 'no-store'});
+    const d = await r.json();
+    if (d.ok) {
+      el.innerHTML = '<span class="text-emerald-700 font-medium">✓ ' + d.message + '.</span>';
+    } else {
+      el.innerHTML = '<span class="text-red-600">Update failed: ' + d.message +
+        '. You can still update by downloading the zip from GitHub Releases.</span>';
+    }
+  } catch (e) {
+    el.innerHTML = '<span class="text-red-600">Update failed (connection lost?). ' +
+      'You can still update by downloading the zip from GitHub Releases.</span>';
+  }
 }
 </script>
 {% endblock %}

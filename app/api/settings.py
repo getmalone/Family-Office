@@ -36,10 +36,41 @@ def settings_page(request: Request, db: Session = Depends(get_db), msg: str = ""
 
 @router.get("/check-updates")
 def check_updates():
-    """Return current/latest version + whether an update is available (JSON)."""
+    """Return current/latest version + whether an update is available (JSON).
+
+    no-store: the PWA service worker must never serve a stale answer here — a
+    cached response once reported a long-gone version as "current".
+    """
     from app.services.updater import get_update_status
 
-    return JSONResponse(get_update_status(fetch=True))
+    return JSONResponse(
+        get_update_status(fetch=True),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/apply-update")
+def apply_update_now():
+    """Install the available update in place.
+
+    Zip installs download the latest GitHub Release bundle and swap the code
+    (data/.env/.venv untouched); git installs check out the tag. Either way the
+    user relaunches to finish — the launcher re-syncs dependencies.
+    """
+    from app.services import updater
+
+    status = updater.get_update_status(fetch=True)
+    if not status["update_available"]:
+        return JSONResponse({"ok": False, "message": "no update available"}, status_code=409)
+    if status["is_git"]:
+        ok, msg = updater.apply_update(status["latest"])
+    else:
+        ok, msg = updater.apply_manual_update()
+    return JSONResponse(
+        {"ok": ok, "message": msg, "restart_required": ok},
+        status_code=200 if ok else 500,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/")

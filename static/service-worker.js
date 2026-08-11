@@ -12,7 +12,7 @@
  * Served from "/service-worker.js" so its scope covers the whole origin.
  */
 
-const VERSION = "kfo-v3";
+const VERSION = "kfo-v4";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
@@ -30,7 +30,9 @@ const PRECACHE_URLS = [
 ];
 
 // Never serve a cached response for these — always go to the network.
-const NETWORK_ONLY = ["/agent/", "/health"];
+// Update checks especially: a stale-while-revalidate cache once reported a
+// long-uninstalled version as "current" on the Settings page.
+const NETWORK_ONLY = ["/agent/", "/health", "/settings/check-updates", "/settings/apply-update"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
