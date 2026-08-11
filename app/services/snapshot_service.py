@@ -79,10 +79,9 @@ class SnapshotService:
         bucket = _bucket_for(now)
         today = now.date()
 
-        held_ids = {
-            aid for (aid,) in self.session.query(TaxLot.asset_id)
-            .filter(TaxLot.is_closed == False).distinct()
-        }
+        from app.services.holdings import held_asset_ids
+
+        held_ids = held_asset_ids(self.session)
         assets = (
             self.session.query(Asset)
             .filter(Asset.id.in_(held_ids), Asset.is_publicly_traded == True, Asset.symbol.isnot(None))
@@ -163,8 +162,10 @@ class SnapshotService:
     # ── Change vs the previous reading ────────────────────────────────────────
 
     def _qty_by_asset(self) -> dict[int, Decimal]:
+        from app.services.holdings import open_lots_query
+
         q: dict[int, Decimal] = {}
-        for lot in self.session.query(TaxLot).filter(TaxLot.is_closed == False).all():
+        for lot in open_lots_query(self.session).all():
             q[lot.asset_id] = q.get(lot.asset_id, Decimal("0")) + lot.remaining_quantity
         return q
 

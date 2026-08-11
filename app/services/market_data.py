@@ -149,10 +149,9 @@ class MarketDataService:
 
     def _held_public_assets(self) -> list[Asset]:
         """Currently-held assets that are publicly traded with a non-stable ticker."""
-        held_ids = {
-            aid for (aid,) in self.session.query(TaxLot.asset_id)
-            .filter(TaxLot.is_closed == False).distinct()
-        }
+        from app.services.holdings import held_asset_ids
+
+        held_ids = held_asset_ids(self.session)
         if not held_ids:
             return []
         assets = (
@@ -355,10 +354,9 @@ class MarketDataService:
 
     def _proxy_symbols_for_held(self) -> set[str]:
         """look_through_tickers of held, manually-priced (untickered) holdings."""
-        held_ids = {
-            aid for (aid,) in self.session.query(TaxLot.asset_id)
-            .filter(TaxLot.is_closed == False).distinct()
-        }
+        from app.services.holdings import held_asset_ids
+
+        held_ids = held_asset_ids(self.session)
         if not held_ids:
             return set()
         out: set[str] = set()

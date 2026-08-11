@@ -90,10 +90,9 @@ class SymbolService:
         self._price_ok_cache: dict[str, bool] = {}
 
     def _held_public_assets(self) -> list[Asset]:
-        held_ids = {
-            aid for (aid,) in self.session.query(TaxLot.asset_id)
-            .filter(TaxLot.is_closed == False).distinct()
-        }
+        from app.services.holdings import held_asset_ids
+
+        held_ids = held_asset_ids(self.session)
         if not held_ids:
             return []
         assets = (

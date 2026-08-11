@@ -18,6 +18,7 @@ from app.models.asset import Asset, AssetPrice
 from app.models.tax_lot import TaxLot, TaxLotDisposal, WashSaleAdjustment
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.portfolio import HoldingDetail, PortfolioSummary, TradeResult
+from app.services.holdings import open_lots_query
 from app.services.market_data import MarketDataService, is_cash_asset
 
 
@@ -35,11 +36,14 @@ class PortfolioService:
         self.market_data = market_data or MarketDataService(session)
 
     def get_summary(self, account_id: int | None = None) -> PortfolioSummary:
-        """Get portfolio summary with all open positions."""
-        query = (
-            self.session.query(TaxLot)
-            .filter(TaxLot.is_closed == False)
-        )
+        """Get portfolio summary with all open positions.
+
+        Only ACTIVE accounts count — a removed (soft-deleted) account's
+        positions must not linger in AUM/holdings while the Accounts page
+        excludes them. Realized YTD below deliberately keeps every disposal:
+        gains already taken are tax events regardless of the account's fate.
+        """
+        query = open_lots_query(self.session)
         if account_id:
             query = query.filter(TaxLot.account_id == account_id)
 
@@ -367,8 +371,8 @@ class PortfolioService:
     def get_open_lots(
         self, account_id: int | None = None, asset_id: int | None = None
     ) -> list[TaxLot]:
-        """Get all open (non-closed) tax lots, optionally filtered."""
-        query = self.session.query(TaxLot).filter(TaxLot.is_closed == False)
+        """Get open tax lots in active accounts, optionally filtered."""
+        query = open_lots_query(self.session)
         if account_id:
             query = query.filter(TaxLot.account_id == account_id)
         if asset_id:
@@ -510,8 +514,8 @@ class PortfolioService:
 
         cutoff = date.today() - timedelta(days=days)
 
-        # All open lots
-        lots = self.session.query(TaxLot).filter(TaxLot.is_closed == False).all()
+        # All open lots (active accounts only — a removed account leaves the trend)
+        lots = open_lots_query(self.session).all()
         if not lots:
             return {"dates": [], "total": [], "by_account": {}}
 

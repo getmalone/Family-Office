@@ -329,7 +329,9 @@ class MorningBriefService:
     def _portfolio_day_impact(
         self, today: date, yesterday: date
     ) -> tuple[list[dict], dict]:
-        lots = self.session.query(TaxLot).filter(TaxLot.is_closed == False).all()
+        from app.services.holdings import open_lots_query
+
+        lots = open_lots_query(self.session).all()
         if not lots:
             return [], {"total_mv": 0, "day_chg": 0, "day_chg_pct": 0, "up": True}
 

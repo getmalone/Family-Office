@@ -56,7 +56,9 @@ class TaxService:
         query = (
             self.session.query(TaxLot)
             .join(Account, TaxLot.account_id == Account.id)
-            .filter(TaxLot.is_closed == False, Account.is_taxable == True)
+            # Active accounts only — you can't harvest in an account you've removed.
+            .filter(TaxLot.is_closed == False, Account.is_taxable == True,
+                    Account.is_active == True)
         )
         if account_id:
             query = query.filter(TaxLot.account_id == account_id)
@@ -258,7 +260,9 @@ class TaxService:
 
     def _simulate_basis_method(self, method: str) -> Decimal:
         """Estimate tax impact if all open lots were sold today using the given method."""
-        lots = self.session.query(TaxLot).filter(TaxLot.is_closed == False).all()
+        from app.services.holdings import open_lots_query
+
+        lots = open_lots_query(self.session).all()
 
         # Group by asset
         by_asset: dict[int, list[TaxLot]] = {}
