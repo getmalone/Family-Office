@@ -203,7 +203,15 @@ def _safe_extract(zip_path: Path, target: Path) -> None:
 
 
 def _bundle_root(extract_dir: Path) -> Path | None:
-    """The family-office-<version>/ directory inside an extracted bundle."""
+    """Locate the app inside an extracted bundle.
+
+    Real bundles are FLAT — build_release.py zips the staging dir's *contents*
+    (shutil.make_archive with root_dir=stage), so pyproject.toml/app/ sit at
+    the archive top level. Also accepts a single family-office-<version>/
+    wrapper dir, in case the packaging ever changes shape.
+    """
+    if (extract_dir / "pyproject.toml").exists() and (extract_dir / "app").is_dir():
+        return extract_dir
     for child in sorted(extract_dir.iterdir()):
         if child.is_dir() and (child / "pyproject.toml").exists() and (child / "app").is_dir():
             return child

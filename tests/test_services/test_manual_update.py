@@ -72,7 +72,10 @@ def _make_install(root: Path) -> None:
     (root / "pyproject.toml").write_text('version = "0.1.18"\n')
 
 
-def _make_bundle_zip(path: Path, version="9.9.9") -> Path:
+def _make_bundle_zip(path: Path, version="9.9.9", wrapped=False) -> Path:
+    """Craft a release bundle zip. Real bundles are FLAT (contents at the
+    archive top level — that's what shutil.make_archive(root_dir=stage)
+    produces); wrapped=True builds the tolerated wrapper-dir variant."""
     bundle = path / f"family-office-{version}"
     (bundle / "app").mkdir(parents=True)
     (bundle / "app" / "__init__.py").write_text("NEW")
@@ -83,9 +86,10 @@ def _make_bundle_zip(path: Path, version="9.9.9") -> Path:
     (bundle / "uv.lock").write_text("lock")
     (bundle / "family-office-macos.command").write_text("#!/bin/bash\n")
     zip_path = path / "bundle.zip"
+    arc_base = path if wrapped else bundle
     with zipfile.ZipFile(zip_path, "w") as zf:
         for p in bundle.rglob("*"):
-            zf.write(p, p.relative_to(path))
+            zf.write(p, p.relative_to(arc_base))
     return zip_path
 
 
@@ -101,6 +105,15 @@ def fake_install(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_download_zip",
                         lambda url, dest, **kw: dest.write_bytes(zip_path.read_bytes()))
     return root
+
+
+def test_apply_accepts_wrapped_bundle_shape(fake_install, tmp_path, monkeypatch):
+    wrapped = _make_bundle_zip(tmp_path / "wrapped", wrapped=True)
+    monkeypatch.setattr(updater, "_download_zip",
+                        lambda url, dest, **kw: dest.write_bytes(wrapped.read_bytes()))
+    ok, msg = updater.apply_manual_update()
+    assert ok, msg
+    assert (fake_install / "app" / "__init__.py").read_text() == "NEW"
 
 
 def test_apply_swaps_code_and_preserves_user_data(fake_install):
