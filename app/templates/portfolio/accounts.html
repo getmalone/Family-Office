@@ -7,6 +7,13 @@
         <a href="/portfolio/" class="text-blue-600 hover:text-blue-800 text-sm">&larr; Back to Portfolio</a>
     </div>
 
+    {% if msg %}
+    <div class="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 text-sm">{{ msg }}</div>
+    {% endif %}
+    {% if err %}
+    <div class="rounded-lg bg-red-50 border border-red-200 text-red-800 px-4 py-3 text-sm">{{ err }}</div>
+    {% endif %}
+
     <!-- Add Account Form -->
     <div class="bg-white shadow rounded-lg p-6">
         <h3 class="font-medium text-gray-900 mb-4">Add New Account</h3>
@@ -68,7 +75,9 @@
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Owner</th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Taxable</th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
-                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-24">Actions</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Added</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Updated</th>
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-32">Actions</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200">
@@ -96,6 +105,16 @@
                         <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">Inactive</span>
                         {% endif %}
                     </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+                        {{ acct.created_at.strftime("%b %-d, %Y") if acct.created_at else "—" }}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+                        {{ acct.updated_at.strftime("%b %-d, %Y") if acct.updated_at else "—" }}
+                        {% set fp = footprints.get(acct.id) %}
+                        {% if fp and fp.positions %}
+                        <span class="block text-xs text-gray-400">{{ fp.positions }} position{{ '' if fp.positions == 1 else 's' }}</span>
+                        {% endif %}
+                    </td>
                     <td class="px-4 py-3 text-sm text-center">
                         <div class="flex items-center justify-center gap-1">
                             <a href="/portfolio/accounts/edit/{{ acct.id }}" title="Edit account"
@@ -106,11 +125,30 @@
                             </a>
                             {% if acct.is_active %}
                             <form method="POST" action="/portfolio/accounts/delete/{{ acct.id }}" class="inline"
-                                  onsubmit="return confirm('Deactivate {{ acct.name }}?');">
+                                  onsubmit="return confirm('Deactivate {{ acct.name }}? Its holdings stop counting toward AUM but nothing is deleted.');">
                                 <button type="submit" title="Deactivate account"
                                         class="text-gray-400 hover:text-red-600 p-1 rounded hover:bg-red-50">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                                    </svg>
+                                </button>
+                            </form>
+                            {% else %}
+                            <form method="POST" action="/portfolio/accounts/activate/{{ acct.id }}" class="inline">
+                                <button type="submit" title="Reactivate account"
+                                        class="text-gray-400 hover:text-green-600 p-1 rounded hover:bg-green-50">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                    </svg>
+                                </button>
+                            </form>
+                            {% set fp = footprints.get(acct.id) %}
+                            <form method="POST" action="/portfolio/accounts/purge/{{ acct.id }}" class="inline"
+                                  onsubmit="return confirm('Permanently delete {{ acct.name }} and its {{ fp.positions if fp else 0 }} position(s) and {{ fp.transactions if fp else 0 }} transaction(s)?\n\nThis cannot be undone. A backup is saved first.');">
+                                <button type="submit" title="Delete permanently"
+                                        class="text-gray-400 hover:text-red-700 p-1 rounded hover:bg-red-50">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                                     </svg>
                                 </button>
                             </form>

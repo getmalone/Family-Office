@@ -104,3 +104,44 @@ def test_settings_offers_and_applies_duplicate_cleanup(test_client, session, mon
     assert len(lots) == 1
     assert lots[0].original_quantity == Decimal("450")
     assert "Duplicate positions found" not in test_client.get("/settings/").text
+
+
+def test_accounts_page_offers_activate_and_permanent_delete(test_client, session, monkeypatch):
+    """An inactive account must be recoverable and, failing that, removable —
+    previously it could only be edited, with no way back and no way out."""
+    from app.models.account import Account
+    from app.models.tax_lot import TaxLot
+    from app.services import app_settings
+    from app.services.import_service import import_positions_csv
+
+    import_positions_csv(session, "account,symbol,quantity\nOld 401k,VTI,10\n")
+    acct = session.query(Account).filter(Account.name == "Old 401k").first()
+    acct.is_active = False
+    session.commit()
+
+    page = test_client.get("/portfolio/accounts").text
+    assert "/portfolio/accounts/activate/%d" % acct.id in page
+    assert "/portfolio/accounts/purge/%d" % acct.id in page
+    assert "Added" in page and "Updated" in page  # date columns
+
+    # Reactivate, and the destructive control disappears again.
+    r = test_client.post(f"/portfolio/accounts/activate/{acct.id}", follow_redirects=False)
+    assert r.status_code == 303
+    session.expire_all()
+    assert session.get(Account, acct.id).is_active is True
+    assert "/portfolio/accounts/purge/%d" % acct.id not in test_client.get("/portfolio/accounts").text
+
+    # An active account cannot be purged.
+    r = test_client.post(f"/portfolio/accounts/purge/{acct.id}", follow_redirects=False)
+    assert "err=Deactivate" in r.headers["location"]
+    assert session.get(Account, acct.id) is not None
+
+    backups = []
+    monkeypatch.setattr(app_settings, "backup_database", lambda: backups.append(1))
+    test_client.post(f"/portfolio/accounts/delete/{acct.id}", follow_redirects=False)
+    r = test_client.post(f"/portfolio/accounts/purge/{acct.id}", follow_redirects=False)
+    assert "msg=Deleted+Old+401k+permanently" in r.headers["location"]
+    assert backups
+    session.commit()  # end this session's read snapshot before re-checking
+    assert session.query(Account).filter(Account.id == acct.id).first() is None
+    assert session.query(TaxLot).count() == 0

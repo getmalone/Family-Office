@@ -233,8 +233,11 @@ def delete_position(
 
 
 @router.get("/accounts")
-def accounts_list(request: Request, db: Session = Depends(get_db)):
-    """List all accounts with add/edit/delete controls."""
+def accounts_list(request: Request, db: Session = Depends(get_db),
+                  msg: str = "", err: str = ""):
+    """List all accounts with add/edit/activate/delete controls."""
+    from app.services import account_admin
+
     accounts = db.query(Account).order_by(Account.is_active.desc(), Account.name).all()
     members = db.query(FamilyMember).filter(FamilyMember.is_active == True).all()
     entities = db.query(FamilyEntity).filter(FamilyEntity.is_active == True).all()
@@ -248,6 +251,9 @@ def accounts_list(request: Request, db: Session = Depends(get_db)):
             "members": members,
             "entities": entities,
             "account_types": account_types,
+            "footprints": account_admin.footprints(db, accounts),
+            "msg": msg,
+            "err": err,
             "page_title": "Manage Accounts",
         },
     )
@@ -344,6 +350,59 @@ def delete_account(
     if account:
         account.is_active = False
     return RedirectResponse(url="/portfolio/accounts", status_code=303)
+
+
+@router.post("/accounts/activate/{account_id}")
+def activate_account(
+    request: Request,
+    account_id: int,
+    db: Session = Depends(get_db),
+):
+    """Bring a deactivated account back into holdings and AUM."""
+    account = db.get(Account, account_id)
+    if account:
+        account.is_active = True
+    return RedirectResponse(url="/portfolio/accounts", status_code=303)
+
+
+@router.post("/accounts/purge/{account_id}")
+def purge_account_permanently(
+    request: Request,
+    account_id: int,
+    db: Session = Depends(get_db),
+):
+    """Delete an inactive account and every position and trade in it.
+
+    Irreversible, so the database is backed up first and only an account that
+    has already been deactivated can be purged.
+    """
+    from app.services import account_admin, app_settings
+
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/portfolio/accounts?err=Account+not+found",
+                                status_code=303)
+    if account.is_active:
+        return RedirectResponse(
+            url="/portfolio/accounts?err=Deactivate+the+account+before+deleting+it",
+            status_code=303)
+    try:
+        app_settings.backup_database()
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            url=f"/portfolio/accounts?err=Backup+failed,+nothing+deleted:+{exc}",
+            status_code=303)
+    try:
+        counts = account_admin.purge_account(db, account)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return RedirectResponse(url=f"/portfolio/accounts?err=Delete+failed:+{exc}",
+                                status_code=303)
+    msg = (f"Deleted {counts['name']} permanently — {counts['positions']} position(s) "
+           f"and {counts['transactions']} transaction(s). A backup was saved first.")
+    return RedirectResponse(url=f"/portfolio/accounts?msg={msg.replace(' ', '+')}",
+                            status_code=303)
 
 
 # ── Asset Management ───────────────────────────────────────────────

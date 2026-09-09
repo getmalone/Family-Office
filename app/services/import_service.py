@@ -397,7 +397,7 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
     accounts: dict[str, Account] = {}
     assets: dict[str, Asset] = {}
     new_accounts = new_assets = positions = 0
-    replaced = kept_lots = 0
+    replaced = kept_lots = reactivated = 0
     errors: list[str] = []
     today = date.today()
 
@@ -415,6 +415,13 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
         account = accounts.get(key)
         if account is None:
             account = session.query(Account).filter(Account.name.ilike(acct_name)).first()
+            if account is not None and not account.is_active:
+                # Uploading positions for an account is a statement that you
+                # still hold it. Without this the rows land in a deactivated
+                # account and vanish from holdings and AUM, which reads as
+                # "the import created the securities but not the account".
+                account.is_active = True
+                reactivated += 1
             if account is None:
                 acct_type = _enum(AccountTypeEnum, _get(row, "account_type"),
                                   AccountTypeEnum.BROKERAGE, _ACCOUNT_TYPE_ALIASES)
@@ -511,7 +518,7 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
     session.flush()
     return {"accounts": new_accounts, "assets": new_assets,
             "positions": positions, "replaced": replaced,
-            "kept": kept_lots, "errors": errors}
+            "kept": kept_lots, "reactivated": reactivated, "errors": errors}
 
 
 def import_positions_data(session: Session, raw: str, filename: str | None = None) -> dict:

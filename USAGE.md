@@ -109,6 +109,10 @@ supported)
   updated export replaces those accounts' imported positions instead of adding a
   second copy, so your totals stay right. Accounts not in the file are untouched,
   as are hand-entered transactions and any lot you've already sold from.
+- Uploading positions for an account you had deactivated **brings it back**.
+  Otherwise the rows would land in a hidden account and never show up in
+  holdings or AUM, which looks like the import created the securities but not
+  the account.
 - Rows missing an account or a valid quantity are skipped and reported in the
   result message.
 - Imports are recorded as **opening balances**, not as buy/sell trades.
@@ -127,6 +131,14 @@ It keeps each account's most recent upload and deletes the ones it replaced, so
 you don't have to re-upload anything (which matters when your figures have moved
 on since that export). The database is backed up first, and positions with sale
 history are always kept.
+
+**Managing accounts** (Portfolio → Manage Accounts) shows when each account was
+added and last updated, and how many positions it holds. Deactivating an account
+(⊘) hides it from holdings, AUM, and tax views without deleting anything, and
+inactive accounts can be brought back with the ✓ button. To get rid of an old
+account for good, deactivate it first, then use the 🗑 button — it deletes the
+account with every position and trade in it, cannot be undone, and takes a
+database backup first.
 
 ### B) Enter data by hand
 

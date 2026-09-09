@@ -161,6 +161,9 @@ async def import_csv(
         f"Imported {result['positions']} positions ({result.get('format', '').upper()}) — "
         f"{result['accounts']} new accounts, {result['assets']} new securities."
     )
+    if result.get("reactivated"):
+        summary += (f" Reactivated {result['reactivated']} account(s) that had been "
+                    "deactivated.")
     if result.get("replaced"):
         summary += f" Replaced {result['replaced']} previously imported position(s)."
     if result.get("kept"):
