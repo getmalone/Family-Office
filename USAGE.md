@@ -224,6 +224,20 @@ the same password.
 
 ---
 
+### When the app can't reach GitHub
+
+**Settings → Check for updates** may report *"Could not reach GitHub Releases"*
+with a reason in brackets — a corporate proxy, a VPN that inspects HTTPS, a
+firewall, or GitHub rate-limiting the network. The app tries `api.github.com`
+first and falls back to `github.com`, so a network that blocks only the API host
+still updates.
+
+If neither works, the message links to the releases page. Download
+`family-office-<version>.zip` in your browser (which uses the proxy your machine
+is configured for), then use **Install from file** right below the button. The
+app verifies the bundle and swaps the code exactly as an automatic update does —
+your database, settings, and backups are untouched, and a backup is taken first.
+
 ## 5. Troubleshooting
 
 - **"Incorrect password":** the password must match the one used when the

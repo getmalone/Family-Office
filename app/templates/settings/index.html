@@ -20,6 +20,20 @@
               class="bg-slate-700 text-white rounded-md px-5 py-2 text-sm hover:bg-slate-800">Check for updates</button>
       <span id="update-result" class="text-sm text-gray-600"></span>
     </div>
+
+    <div id="upload-update-row" class="hidden mt-3 pt-3 border-t">
+      <p class="text-xs text-gray-500 mb-2">
+        Install from a bundle you downloaded yourself. Your data, settings, and
+        backups are preserved, and the file is verified before anything is replaced.
+      </p>
+      <form id="upload-update-form" class="flex items-center gap-3"
+            onsubmit="event.preventDefault(); uploadUpdate();">
+        <input type="file" name="file" accept=".zip" required class="text-sm">
+        <button type="submit" class="bg-emerald-600 text-white rounded-md px-4 py-1.5 text-sm hover:bg-emerald-700">
+          Install from file
+        </button>
+      </form>
+    </div>
   </div>
 
   {# ── AI assistant ── #}
@@ -181,7 +195,13 @@ async function checkUpdates() {
           'Download &amp; install</button>';
       }
     } else if (!d.is_git && !d.latest) {
-      el.textContent = 'Could not reach GitHub Releases to check — try again shortly.';
+      const why = d.error ? ' <span class="text-gray-500">(' + d.error + ')</span>' : '';
+      el.innerHTML = 'Could not reach GitHub Releases to check.' + why +
+        '<br><a class="text-blue-600 underline" target="_blank" rel="noopener" href="' +
+        (d.releases_url || 'https://github.com/getmalone/Family-Office/releases/latest') +
+        '">Open the releases page</a>, download the <code>family-office-….zip</code>, ' +
+        'then install it below.';
+      document.getElementById('upload-update-row').classList.remove('hidden');
     } else {
       el.textContent = '✓ Up to date (v' + d.current + ').';
     }
@@ -189,6 +209,24 @@ async function checkUpdates() {
     el.textContent = 'Could not check for updates (offline?).';
   }
   btn.disabled = false;
+}
+
+async function uploadUpdate() {
+  const form = document.getElementById('upload-update-form');
+  const el = document.getElementById('update-result');
+  const input = form.querySelector('input[type=file]');
+  if (!input.files.length) return;
+  const body = new FormData();
+  body.append('file', input.files[0]);
+  el.textContent = 'Installing… (about a minute)';
+  try {
+    const d = await (await fetch('/settings/upload-update', {method: 'POST', body: body, cache: 'no-store'})).json();
+    el.innerHTML = d.ok
+      ? '<span class="text-emerald-700 font-medium">✓ ' + d.message + '.</span>'
+      : '<span class="text-red-600">Install failed: ' + d.message + '.</span>';
+  } catch (e) {
+    el.innerHTML = '<span class="text-red-600">Install failed (connection lost?).</span>';
+  }
 }
 
 async function applyUpdate() {

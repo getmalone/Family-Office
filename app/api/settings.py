@@ -36,6 +36,23 @@ def settings_page(request: Request, db: Session = Depends(get_db), msg: str = ""
     )
 
 
+@router.post("/upload-update")
+async def upload_update(file: UploadFile = File(...)):
+    """Install an update from a release zip the user downloaded in the browser.
+
+    The way out when the app itself cannot reach GitHub — a proxy, a firewall,
+    or TLS interception on the network. The browser can fetch the file; the app
+    verifies and installs what it is handed, exactly as an automatic update
+    does.
+    """
+    from app.services import updater
+
+    data = await file.read()
+    ok, message = updater.apply_bundle_file(data)
+    return JSONResponse({"ok": ok, "message": message},
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.post("/repair-duplicates")
 def repair_duplicates(db: Session = Depends(get_db)):
     """Remove positions left stacked by the pre-v0.1.21 append-only importer.

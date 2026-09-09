@@ -145,3 +145,23 @@ def test_accounts_page_offers_activate_and_permanent_delete(test_client, session
     session.commit()  # end this session's read snapshot before re-checking
     assert session.query(Account).filter(Account.id == acct.id).first() is None
     assert session.query(TaxLot).count() == 0
+
+
+def test_upload_update_endpoint_reports_the_result(test_client, monkeypatch):
+    from app.services import updater
+
+    monkeypatch.setattr(updater, "apply_bundle_file",
+                        lambda data: (True, f"updated to v9.9.9 ({len(data)} bytes)"))
+    r = test_client.post("/settings/upload-update",
+                         files={"file": ("family-office-9.9.9.zip", b"PK\x03\x04zip",
+                                         "application/zip")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] and "updated to v9.9.9 (7 bytes)" in body["message"]
+    assert r.headers["cache-control"] == "no-store"
+
+    monkeypatch.setattr(updater, "apply_bundle_file",
+                        lambda data: (False, "that file isn't a Family Office bundle"))
+    r = test_client.post("/settings/upload-update",
+                         files={"file": ("junk.zip", b"nope", "application/zip")})
+    assert r.json() == {"ok": False, "message": "that file isn't a Family Office bundle"}

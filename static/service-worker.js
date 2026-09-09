@@ -32,7 +32,7 @@ const PRECACHE_URLS = [
 // Never serve a cached response for these — always go to the network.
 // Update checks especially: a stale-while-revalidate cache once reported a
 // long-uninstalled version as "current" on the Settings page.
-const NETWORK_ONLY = ["/agent/", "/health", "/settings/check-updates", "/settings/apply-update"];
+const NETWORK_ONLY = ["/agent/", "/health", "/settings/check-updates", "/settings/apply-update", "/settings/upload-update"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
