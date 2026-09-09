@@ -69,3 +69,38 @@ def test_reupload_does_not_inflate_holdings(test_client, session):
     assert session.query(TaxLot).count() == 2  # not 4
     quantities = sorted(l.remaining_quantity for l in session.query(TaxLot).all())
     assert [str(q) for q in quantities] == ["146.00000000", "425.00000000"]
+
+
+def test_settings_offers_and_applies_duplicate_cleanup(test_client, session, monkeypatch):
+    """The stacked-import panel shows up with real counts, and the button
+    removes the superseded uploads after taking a backup."""
+    from datetime import date, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.tax_lot import TaxLot
+    from app.services import app_settings
+    from tests.test_services.test_import_repair import _account, _asset, _upload
+
+    acct = _account(session, "BrokerageLink")
+    voo = _asset(session, "VOO")
+    base = datetime(2026, 8, 1, 9, 0, 0)
+    _upload(session, acct, [(voo, "425", date(2023, 3, 15))], base)
+    _upload(session, acct, [(voo, "450", date(2023, 3, 15))], base + timedelta(days=30))
+    session.commit()
+
+    page = test_client.get("/settings/").text
+    assert "Duplicate positions found" in page
+    assert "BrokerageLink" in page
+
+    backups = []
+    monkeypatch.setattr(app_settings, "backup_database", lambda: backups.append(1))
+
+    r = test_client.post("/settings/repair-duplicates", follow_redirects=False)
+    assert r.status_code == 303
+    assert "Removed+1+duplicate" in r.headers["location"]
+    assert backups  # never mutate without a backup first
+
+    lots = session.query(TaxLot).all()
+    assert len(lots) == 1
+    assert lots[0].original_quantity == Decimal("450")
+    assert "Duplicate positions found" not in test_client.get("/settings/").text

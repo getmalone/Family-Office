@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
 from app.services import app_settings
+from app.services import import_repair
 from app.services.import_service import import_positions_data
 from app.version import get_app_version
 
@@ -26,12 +27,45 @@ def settings_page(request: Request, db: Session = Depends(get_db), msg: str = ""
         {
             "request": request,
             "values": app_settings.masked_settings(db),
+            "duplicates": import_repair.scan(db),
             "version": get_app_version(),
             "msg": msg,
             "err": err,
             "page_title": "Settings",
         },
     )
+
+
+@router.post("/repair-duplicates")
+def repair_duplicates(db: Session = Depends(get_db)):
+    """Remove positions left stacked by the pre-v0.1.21 append-only importer.
+
+    Keeps each account's most recent upload and drops the ones it superseded, so
+    an account that has drifted since its last export is repaired without having
+    to re-upload a file that is now out of date.
+    """
+    try:
+        app_settings.backup_database()  # the DB is about to lose rows
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            url=f"/settings/?err=Backup+failed,+nothing+removed:+{exc}", status_code=303)
+    try:
+        report = import_repair.repair(db)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return RedirectResponse(url=f"/settings/?err=Repair+failed:+{exc}", status_code=303)
+
+    if not report["removable"]:
+        return RedirectResponse(url="/settings/?msg=No+duplicate+positions+found.",
+                                status_code=303)
+    summary = (
+        f"Removed {report['removable']} duplicate position(s) across "
+        f"{len(report['accounts'])} account(s). A backup was saved first."
+    )
+    if report["kept"]:
+        summary += f" Kept {report['kept']} with sale history."
+    return RedirectResponse(url=f"/settings/?msg={summary.replace(' ', '+')}", status_code=303)
 
 
 @router.get("/check-updates")

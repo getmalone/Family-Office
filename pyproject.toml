@@ -1,6 +1,6 @@
 [project]
 name = "family-office"
-version = "0.1.21"
+version = "0.1.22"
 description = """
 A Family Office agentic AI system — a production-ready multi-agent platform
 for autonomous wealth management, tax optimization, accounting, compliance, and

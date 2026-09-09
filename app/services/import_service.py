@@ -317,50 +317,68 @@ def detect_format(raw: str, filename: str | None = None) -> str:
 IMPORT_NOTE = "Imported opening position"
 
 
+def imported_lots(session: Session, account_id: int | None = None) -> list[TaxLot]:
+    """Every opening lot this importer created, optionally for one account."""
+    q = (
+        session.query(TaxLot)
+        .join(Transaction, TaxLot.acquisition_transaction_id == Transaction.id)
+        .filter(Transaction.notes == IMPORT_NOTE)
+    )
+    if account_id is not None:
+        q = q.filter(TaxLot.account_id == account_id)
+    return q.all()
+
+
+def lot_has_history(session: Session, lot: TaxLot) -> bool:
+    """True if anything real depends on this lot, so it must never be deleted.
+
+    A lot that has been sold from — or that a disposal, wash-sale adjustment, or
+    compliance flag points at — is history the user built, not a re-importable
+    snapshot row.
+    """
+    return bool(
+        lot.is_closed
+        or lot.remaining_quantity != lot.original_quantity
+        or session.query(TaxLotDisposal.id)
+        .filter(TaxLotDisposal.tax_lot_id == lot.id).first() is not None
+        or session.query(WashSaleAdjustment.id)
+        .filter(WashSaleAdjustment.replacement_lot_id == lot.id).first() is not None
+        or session.query(ComplianceFlag.id)
+        .filter(ComplianceFlag.related_transaction_id == lot.acquisition_transaction_id)
+        .first() is not None
+    )
+
+
+def delete_imported_lot(session: Session, lot: TaxLot) -> None:
+    """Delete an imported lot and the acquisition transaction it owns."""
+    txn_id = lot.acquisition_transaction_id
+    session.delete(lot)
+    shared = (
+        session.query(TaxLot.id)
+        .filter(TaxLot.acquisition_transaction_id == txn_id, TaxLot.id != lot.id)
+        .first()
+    )
+    if shared is None:
+        txn = session.get(Transaction, txn_id)
+        if txn is not None:
+            session.delete(txn)
+
+
 def _purge_imported_positions(session: Session, account: Account) -> tuple[int, int]:
     """Clear a previous import's opening positions for one account.
 
     Each upload is the account's *current* snapshot, so re-uploading must not
     stack a second copy of every holding on top of the first (which silently
-    doubled the account's value). Only untouched rows this importer created are
-    removed — a lot that has been sold from, or that any disposal, wash-sale
-    adjustment, or compliance flag points at, is real history and is kept.
+    doubled the account's value). Lots with real history are kept.
 
     Returns (removed, kept) lot counts.
     """
     removed = kept = 0
-    lots = (
-        session.query(TaxLot)
-        .join(Transaction, TaxLot.acquisition_transaction_id == Transaction.id)
-        .filter(TaxLot.account_id == account.id, Transaction.notes == IMPORT_NOTE)
-        .all()
-    )
-    for lot in lots:
-        referenced = (
-            lot.is_closed
-            or lot.remaining_quantity != lot.original_quantity
-            or session.query(TaxLotDisposal.id)
-            .filter(TaxLotDisposal.tax_lot_id == lot.id).first() is not None
-            or session.query(WashSaleAdjustment.id)
-            .filter(WashSaleAdjustment.replacement_lot_id == lot.id).first() is not None
-            or session.query(ComplianceFlag.id)
-            .filter(ComplianceFlag.related_transaction_id == lot.acquisition_transaction_id)
-            .first() is not None
-        )
-        if referenced:
+    for lot in imported_lots(session, account.id):
+        if lot_has_history(session, lot):
             kept += 1
             continue
-        txn_id = lot.acquisition_transaction_id
-        session.delete(lot)
-        shared = (
-            session.query(TaxLot.id)
-            .filter(TaxLot.acquisition_transaction_id == txn_id, TaxLot.id != lot.id)
-            .first()
-        )
-        if shared is None:
-            txn = session.get(Transaction, txn_id)
-            if txn is not None:
-                session.delete(txn)
+        delete_imported_lot(session, lot)
         removed += 1
     if removed:
         session.flush()

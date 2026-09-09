@@ -105,13 +105,28 @@ supported)
 ```
 
 **Notes**
-- Re-importing into an account with the same name reuses it (no duplicates).
+- Each file is the **current snapshot** of the accounts it names. Re-uploading an
+  updated export replaces those accounts' imported positions instead of adding a
+  second copy, so your totals stay right. Accounts not in the file are untouched,
+  as are hand-entered transactions and any lot you've already sold from.
 - Rows missing an account or a valid quantity are skipped and reported in the
   result message.
 - Imports are recorded as **opening balances**, not as buy/sell trades.
-- Most broker exports can be saved as CSV; column names are matched loosely
-  (e.g. `ticker`→`symbol`, `shares`→`quantity`), so light cleanup is usually
-  all that's needed.
+- Blank rows and blank columns above or around the data are ignored, so a raw
+  spreadsheet export usually imports as-is.
+- Most broker exports can be saved as CSV; column names and values are matched
+  loosely (`ticker`→`symbol`, `shares`→`quantity`, `401(k)`→`401k`,
+  `international_equity`→`intl_equity`), so light cleanup is usually all that's
+  needed.
+
+**Already got inflated numbers?** Versions before v0.1.21 added a second copy of
+every holding on each re-upload. If an account's value looks too high, open
+**Settings** — when stacked positions are detected you'll see a *Duplicate
+positions found* panel listing the affected accounts and what would be removed.
+It keeps each account's most recent upload and deletes the ones it replaced, so
+you don't have to re-upload anything (which matters when your figures have moved
+on since that export). The database is backed up first, and positions with sale
+history are always kept.
 
 ### B) Enter data by hand
 
