@@ -127,6 +127,10 @@ async def import_csv(
         f"Imported {result['positions']} positions ({result.get('format', '').upper()}) — "
         f"{result['accounts']} new accounts, {result['assets']} new securities."
     )
+    if result.get("replaced"):
+        summary += f" Replaced {result['replaced']} previously imported position(s)."
+    if result.get("kept"):
+        summary += f" Kept {result['kept']} position(s) with sale history."
     if result["errors"]:
         summary += f" {len(result['errors'])} row(s) skipped."
     return RedirectResponse(url=f"/settings/?msg={summary.replace(' ', '+')}", status_code=303)

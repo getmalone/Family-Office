@@ -37,3 +37,35 @@ def test_csv_import_via_upload(test_client):
     )
     assert r.status_code == 303
     assert "Imported" in r.headers["location"]
+
+
+# The exact shape of a raw Google Sheets export: blank first row, blank leading
+# column. Uploaded twice, it must not double the account's holdings.
+SHEET_EXPORT = (
+    b",,,,,\n"
+    b",account,account_type,symbol,asset_class,quantity\n"
+    b",SALESFORCE.COM,401k,84679P140,international_equity,146\n"
+    b",BrokerageLink,brokerage,SCHD,us_equity,425\n"
+)
+
+
+def test_reupload_does_not_inflate_holdings(test_client, session):
+    from app.models.tax_lot import TaxLot
+
+    def upload():
+        return test_client.post(
+            "/settings/import",
+            files={"file": ("sheet.csv", SHEET_EXPORT, "text/csv")},
+            follow_redirects=False,
+        )
+
+    first = upload()
+    assert first.status_code == 303
+    assert session.query(TaxLot).count() == 2
+
+    second = upload()
+    assert second.status_code == 303
+    assert "Replaced+2" in second.headers["location"]
+    assert session.query(TaxLot).count() == 2  # not 4
+    quantities = sorted(l.remaining_quantity for l in session.query(TaxLot).all())
+    assert [str(q) for q in quantities] == ["146.00000000", "425.00000000"]

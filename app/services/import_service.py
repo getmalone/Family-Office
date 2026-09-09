@@ -6,6 +6,11 @@ instead of entering everything by hand. Positions are imported as *opening tax
 lots* (an acquisition Transaction + a TaxLot), the same snapshot approach used by
 the private broker-specific importers.
 
+Each file is the *current snapshot* of the accounts it names: re-uploading an
+updated export replaces that account's previously imported opening positions
+rather than stacking a second copy on top of them. Accounts absent from the file,
+hand-entered transactions, and lots with sale history are never touched.
+
 All three formats share the same field names. Only ``account`` and ``quantity``
 are mandatory; everything else is optional:
 
@@ -13,7 +18,9 @@ are mandatory; everything else is optional:
     quantity, cost_basis_total, cost_per_share, acquired, price
 
 Accepted shapes:
-  • CSV  — header row + one position per line.
+  • CSV  — header row + one position per line. Leading blank/title rows,
+           blank spacer columns, and blank rows are ignored, so a raw
+           spreadsheet export imports as-is.
   • JSON — a list of position objects; or {"positions": [...]}; or a nested
            {"accounts": [{"account": "...", "positions": [...]}]} form.
   • XML  — <positions><position>…</position></positions> (field per child element
@@ -25,6 +32,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -33,7 +41,8 @@ from sqlalchemy.orm import Session
 
 from app.models.account import Account, AccountTypeEnum
 from app.models.asset import Asset, AssetClassEnum, AssetPrice
-from app.models.tax_lot import TaxLot
+from app.models.report import ComplianceFlag
+from app.models.tax_lot import TaxLot, TaxLotDisposal, WashSaleAdjustment
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.services.market_data import STABLE_VALUE_SYMBOLS
 
@@ -76,12 +85,71 @@ def _parse_date(value) -> date:
     return date.today()
 
 
-def _enum(enum_cls, value, default):
+def _slug(value) -> str:
+    """Lowercase and collapse punctuation to underscores: "Intl Equity" → intl_equity."""
+    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+
+
+# Spellings that exports use for values our enums name differently. Without
+# these the importer silently falls back to its default (every fund landing in
+# US_EQUITY, every account in BROKERAGE).
+_ACCOUNT_TYPE_ALIASES = {
+    "401": AccountTypeEnum.FOUR01K,
+    "401_k": AccountTypeEnum.FOUR01K,
+    "roth_401k": AccountTypeEnum.FOUR01K,
+    "roth": AccountTypeEnum.IRA_ROTH,
+    "roth_ira": AccountTypeEnum.IRA_ROTH,
+    "ira": AccountTypeEnum.IRA_TRADITIONAL,
+    "traditional_ira": AccountTypeEnum.IRA_TRADITIONAL,
+    "rollover_ira": AccountTypeEnum.IRA_TRADITIONAL,
+    "sep_ira": AccountTypeEnum.IRA_TRADITIONAL,
+    "taxable": AccountTypeEnum.BROKERAGE,
+    "individual": AccountTypeEnum.BROKERAGE,
+    "joint": AccountTypeEnum.BROKERAGE,
+    "checking": AccountTypeEnum.BANK_CHECKING,
+    "savings": AccountTypeEnum.BANK_SAVINGS,
+    "529_plan": AccountTypeEnum.FIVE29,
+}
+
+_ASSET_CLASS_ALIASES = {
+    "equity": AssetClassEnum.US_EQUITY,
+    "equities": AssetClassEnum.US_EQUITY,
+    "stock": AssetClassEnum.US_EQUITY,
+    "stocks": AssetClassEnum.US_EQUITY,
+    "domestic_equity": AssetClassEnum.US_EQUITY,
+    "us_stock": AssetClassEnum.US_EQUITY,
+    "international": AssetClassEnum.INTL_EQUITY,
+    "international_equity": AssetClassEnum.INTL_EQUITY,
+    "international_stock": AssetClassEnum.INTL_EQUITY,
+    "intl": AssetClassEnum.INTL_EQUITY,
+    "foreign_equity": AssetClassEnum.INTL_EQUITY,
+    "developed_markets": AssetClassEnum.INTL_EQUITY,
+    "emerging_markets": AssetClassEnum.INTL_EQUITY,
+    "bond": AssetClassEnum.FIXED_INCOME,
+    "bonds": AssetClassEnum.FIXED_INCOME,
+    "bond_fund": AssetClassEnum.FIXED_INCOME,
+    "money_market": AssetClassEnum.CASH,
+    "cash_equivalent": AssetClassEnum.CASH,
+    "cash_equivalents": AssetClassEnum.CASH,
+    "commodities": AssetClassEnum.COMMODITY,
+    "precious_metals": AssetClassEnum.COMMODITY,
+    "gold": AssetClassEnum.COMMODITY,
+    "reit": AssetClassEnum.REAL_ESTATE,
+    "reits": AssetClassEnum.REAL_ESTATE,
+    "cryptocurrency": AssetClassEnum.CRYPTO,
+    "digital_asset": AssetClassEnum.CRYPTO,
+    "alternatives": AssetClassEnum.ALTERNATIVE,
+}
+
+
+def _enum(enum_cls, value, default, aliases: dict | None = None):
     if value:
-        v = str(value).strip().lower()
+        v = _slug(value)
         for member in enum_cls:
-            if member.value == v:
+            if _slug(member.value) == v:
                 return member
+        if aliases and v in aliases:
+            return aliases[v]
     return default
 
 
@@ -95,9 +163,46 @@ def _norm(d: dict) -> dict[str, str]:
 
 # ── format parsers → list of normalized row dicts ───────────────────────────
 
+# Column names we recognize, used to locate the header row in a spreadsheet
+# export that starts with blank or title rows.
+_KNOWN_COLUMNS = {
+    "account", "account_name", "account_type", "institution", "symbol", "ticker",
+    "name", "security", "description", "asset_class", "quantity", "qty", "shares",
+    "units", "cost_basis_total", "cost_basis", "total_cost", "cost_per_share",
+    "unit_cost", "acquired", "acquisition_date", "date", "price", "current_price",
+}
+
+
 def parse_csv(text: str) -> list[dict]:
-    reader = csv.DictReader(io.StringIO(text))
-    return [_norm(row) for row in reader]
+    """Parse a CSV export into row dicts.
+
+    Tolerant of what spreadsheet exports actually look like: leading blank or
+    title rows above the header, blank spacer columns, blank rows in the middle,
+    and short rows.
+    """
+    rows = list(csv.reader(io.StringIO(text)))
+
+    # Header = the first row naming a column we know; failing that, the first
+    # row with any content at all.
+    header_idx = next(
+        (i for i, r in enumerate(rows) if {_slug(c) for c in r} & _KNOWN_COLUMNS),
+        None,
+    )
+    if header_idx is None:
+        header_idx = next((i for i, r in enumerate(rows) if any(c.strip() for c in r)), None)
+    if header_idx is None:
+        return []
+
+    header = [(c or "").strip().lower() for c in rows[header_idx]]
+    out: list[dict] = []
+    for raw in rows[header_idx + 1:]:
+        if not any((c or "").strip() for c in raw):
+            continue  # blank spacer row
+        out.append({
+            key: (raw[j] or "").strip() if j < len(raw) else ""
+            for j, key in enumerate(header) if key  # unnamed spacer columns dropped
+        })
+    return out
 
 
 def _flatten_accounts(items: list) -> list[dict]:
@@ -207,6 +312,61 @@ def detect_format(raw: str, filename: str | None = None) -> str:
 
 # ── core import ─────────────────────────────────────────────────────────────
 
+# Marks the acquisition transactions this importer creates, so a later import
+# can tell its own opening positions apart from real, hand-entered history.
+IMPORT_NOTE = "Imported opening position"
+
+
+def _purge_imported_positions(session: Session, account: Account) -> tuple[int, int]:
+    """Clear a previous import's opening positions for one account.
+
+    Each upload is the account's *current* snapshot, so re-uploading must not
+    stack a second copy of every holding on top of the first (which silently
+    doubled the account's value). Only untouched rows this importer created are
+    removed — a lot that has been sold from, or that any disposal, wash-sale
+    adjustment, or compliance flag points at, is real history and is kept.
+
+    Returns (removed, kept) lot counts.
+    """
+    removed = kept = 0
+    lots = (
+        session.query(TaxLot)
+        .join(Transaction, TaxLot.acquisition_transaction_id == Transaction.id)
+        .filter(TaxLot.account_id == account.id, Transaction.notes == IMPORT_NOTE)
+        .all()
+    )
+    for lot in lots:
+        referenced = (
+            lot.is_closed
+            or lot.remaining_quantity != lot.original_quantity
+            or session.query(TaxLotDisposal.id)
+            .filter(TaxLotDisposal.tax_lot_id == lot.id).first() is not None
+            or session.query(WashSaleAdjustment.id)
+            .filter(WashSaleAdjustment.replacement_lot_id == lot.id).first() is not None
+            or session.query(ComplianceFlag.id)
+            .filter(ComplianceFlag.related_transaction_id == lot.acquisition_transaction_id)
+            .first() is not None
+        )
+        if referenced:
+            kept += 1
+            continue
+        txn_id = lot.acquisition_transaction_id
+        session.delete(lot)
+        shared = (
+            session.query(TaxLot.id)
+            .filter(TaxLot.acquisition_transaction_id == txn_id, TaxLot.id != lot.id)
+            .first()
+        )
+        if shared is None:
+            txn = session.get(Transaction, txn_id)
+            if txn is not None:
+                session.delete(txn)
+        removed += 1
+    if removed:
+        session.flush()
+    return removed, kept
+
+
 def _get(row: dict, *keys: str) -> str | None:
     for k in keys:
         if row.get(k) not in (None, ""):
@@ -219,6 +379,7 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
     accounts: dict[str, Account] = {}
     assets: dict[str, Asset] = {}
     new_accounts = new_assets = positions = 0
+    replaced = kept_lots = 0
     errors: list[str] = []
     today = date.today()
 
@@ -237,7 +398,8 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
         if account is None:
             account = session.query(Account).filter(Account.name.ilike(acct_name)).first()
             if account is None:
-                acct_type = _enum(AccountTypeEnum, _get(row, "account_type"), AccountTypeEnum.BROKERAGE)
+                acct_type = _enum(AccountTypeEnum, _get(row, "account_type"),
+                                  AccountTypeEnum.BROKERAGE, _ACCOUNT_TYPE_ALIASES)
                 account = Account(
                     name=acct_name,
                     account_type=acct_type,
@@ -248,6 +410,12 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
                 session.add(account)
                 session.flush()
                 new_accounts += 1
+            # First time this account is touched in this file: drop the
+            # previous import's opening positions so the upload replaces them
+            # rather than stacking another copy on top.
+            gone, held = _purge_imported_positions(session, account)
+            replaced += gone
+            kept_lots += held
             accounts[key] = account
 
         symbol = _get(row, "symbol", "ticker")
@@ -261,7 +429,8 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
                 asset = Asset(
                     symbol=symbol.upper() if symbol else None,
                     name=name,
-                    asset_class=_enum(AssetClassEnum, _get(row, "asset_class"), AssetClassEnum.US_EQUITY),
+                    asset_class=_enum(AssetClassEnum, _get(row, "asset_class"),
+                                      AssetClassEnum.US_EQUITY, _ASSET_CLASS_ALIASES),
                     is_publicly_traded=bool(symbol),
                 )
                 session.add(asset)
@@ -290,7 +459,7 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
             quantity=qty,
             price_per_unit=cost_per,
             total_amount=cost_total,
-            notes="Imported opening position",
+            notes=IMPORT_NOTE,
         )
         session.add(txn)
         session.flush()
@@ -322,7 +491,9 @@ def import_rows(session: Session, rows: list[dict]) -> dict:
         positions += 1
 
     session.flush()
-    return {"accounts": new_accounts, "assets": new_assets, "positions": positions, "errors": errors}
+    return {"accounts": new_accounts, "assets": new_assets,
+            "positions": positions, "replaced": replaced,
+            "kept": kept_lots, "errors": errors}
 
 
 def import_positions_data(session: Session, raw: str, filename: str | None = None) -> dict:
