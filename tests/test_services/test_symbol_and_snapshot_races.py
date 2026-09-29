@@ -137,3 +137,145 @@ def test_upsert_daily_close_survives_a_duplicate_insert(session, monkeypatch):
 
     rows = session.query(AssetPrice).filter_by(asset_id=1, price_date=today).all()
     assert len(rows) == 1
+
+
+# ── 3. The write lock ────────────────────────────────────────────────────────
+#
+# v0.1.24 log: POST /prices/refresh → capture() → "database is locked" on
+# `UPDATE price_snapshots`, raised from autoflush, which left the request session
+# un-committable → HTTP 500. Two captures were in flight: the Daily Brief's
+# background on-open capture (it reloads itself every 5 minutes) and the user
+# pressing Refresh. Each held SQLite's single writer across a quote-per-symbol
+# fetch, so the loser waited out busy_timeout and died.
+
+
+def _held_public_asset(session, asset_id: int, symbol: str):
+    from app.models.tax_lot import TaxLot
+    from app.models.transaction import Transaction, TransactionTypeEnum
+
+    acct = session.query(Account).first()
+    if acct is None:
+        acct = Account(id=1, name="B", account_type=AccountTypeEnum.BROKERAGE, is_taxable=True)
+        session.add(acct); session.flush()
+    session.add(Asset(id=asset_id, symbol=symbol, name=symbol,
+                      asset_class=AssetClassEnum.US_EQUITY, is_publicly_traded=True))
+    session.flush()
+    txn = Transaction(account_id=acct.id, asset_id=asset_id,
+                      transaction_type=TransactionTypeEnum.BUY, transaction_date=date(2024, 1, 1),
+                      quantity=Decimal("10"), price_per_unit=Decimal("100"),
+                      total_amount=Decimal("1000"), fees=Decimal("0"))
+    session.add(txn); session.flush()
+    session.add(TaxLot(account_id=acct.id, asset_id=asset_id, acquisition_date=date(2024, 1, 1),
+                       acquisition_transaction_id=txn.id, original_quantity=Decimal("10"),
+                       remaining_quantity=Decimal("10"), cost_basis_per_unit=Decimal("100"),
+                       original_cost_basis_per_unit=Decimal("100")))
+    session.flush()
+
+
+class _FakeHist:
+    """Stands in for a yfinance history frame: hist.empty / hist.iloc[-1]["Close"]."""
+    empty = False
+
+    class _ILoc:
+        def __getitem__(self, _i):
+            return {"Close": 227.94}
+
+    iloc = _ILoc()
+
+
+def test_capture_quotes_everything_before_it_writes(session, monkeypatch):
+    """No write may land while quotes are still being fetched.
+
+    That interleaving is what held the writer lock for the whole run. Each fake
+    quote asserts the DB is still untouched, so a regression to fetch-and-write
+    fails here instead of in production.
+    """
+    _held_public_asset(session, 1, "AAPL")
+    _held_public_asset(session, 2, "MSFT")
+
+    import yfinance as yf
+
+    seen: list[str] = []
+
+    def _fake_ticker(sym):
+        seen.append(sym)
+        assert not session.new, "rows were queued for insert before the fetch finished"
+        assert session.query(PriceSnapshot).count() == 0, "wrote to the DB mid-fetch"
+
+        class _T:
+            def history(self, **_kw):
+                return _FakeHist()
+
+        return _T()
+
+    monkeypatch.setattr(yf, "Ticker", _fake_ticker)
+    SnapshotService(session).capture(force=True)
+
+    assert sorted(seen) == ["AAPL", "MSFT"]
+    assert session.query(PriceSnapshot).count() == 2      # both written, after the fetch
+
+
+def test_only_one_capture_runs_at_a_time(session, monkeypatch):
+    """A second capture reports the readings on hand instead of queueing behind
+    the first as a rival writer."""
+    from app.services import snapshot_service as ss
+
+    _held_public_asset(session, 1, "AAPL")
+
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Ticker", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("must not fetch while another capture holds the lock")))
+    monkeypatch.setattr(ss, "_LOCK_WAIT_SECONDS", 0.05)   # don't make the test wait
+
+    assert ss._capture_lock.acquire(blocking=False)       # pretend a capture is in flight
+    try:
+        out = SnapshotService(session).capture(force=True)
+    finally:
+        ss._capture_lock.release()
+
+    assert out["skipped"] == "capture already running"
+    assert session.query(PriceSnapshot).count() == 0
+
+
+def test_opportunistic_capture_yields_the_lock_immediately(session, monkeypatch):
+    from app.services import snapshot_service as ss
+
+    _held_public_asset(session, 1, "AAPL")
+
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Ticker", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("must not fetch while another capture holds the lock")))
+
+    assert ss._capture_lock.acquire(blocking=False)
+    try:
+        out = SnapshotService(session).capture(force=False)   # no wait at all
+    finally:
+        ss._capture_lock.release()
+
+    assert out["skipped"] == "capture already running"
+
+
+def test_a_locked_database_does_not_poison_the_session(session, monkeypatch):
+    """If the write burst still loses the lock, roll back and report — the
+    un-rolled-back failure is what turned a lock wait into an HTTP 500."""
+    from sqlalchemy.exc import OperationalError
+
+    _held_public_asset(session, 1, "AAPL")
+
+    import yfinance as yf
+
+    class _T:
+        def history(self, **_kw):
+            return _FakeHist()
+
+    monkeypatch.setattr(yf, "Ticker", lambda *a, **k: _T())
+
+    svc = SnapshotService(session)
+    monkeypatch.setattr(svc, "_upsert_snapshot", lambda *a, **k: (_ for _ in ()).throw(
+        OperationalError("UPDATE price_snapshots", {}, Exception("database is locked"))))
+
+    out = svc.capture(force=True)
+
+    assert out["skipped"] == "database busy"
+    session.query(PriceSnapshot).count()      # session still usable, not PendingRollbackError
+    session.commit()

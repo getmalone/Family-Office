@@ -9,14 +9,20 @@ whatever came right before it.
 Repeated captures within the same bucket update that bucket's reading in place
 (latest price wins). Stable-value holdings (CASH, money markets) are pinned to
 $1.00 and never priced from yfinance — fixing the CASH-as-$83 corruption.
+
+A capture quotes every holding first and writes afterwards, and only one runs at
+a time (``_capture_lock``): SQLite takes a single writer, so a capture that
+interleaved network fetches with writes held that lock for its whole run and any
+overlapping capture died with "database is locked".
 """
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset, AssetPrice, PriceSnapshot
@@ -35,6 +41,19 @@ _BUCKETS: list[tuple[str, time, str]] = [
     ("evening",   time(16, 0), "Evening"),
 ]
 _BUCKET_LABEL = {key: label for key, _, label in _BUCKETS}
+
+
+# SQLite/SQLCipher allows exactly one writer. A capture writes a row per held
+# symbol, so two overlapping captures — the manual Refresh and the background
+# on-open capture — used to fight over that lock until one waited out
+# busy_timeout and died with "database is locked"; the failed autoflush then left
+# the request's session un-committable and 500'd the refresh. One capture at a
+# time, process-wide.
+_capture_lock = threading.Lock()
+
+# How long the manual Refresh waits for an in-flight capture before giving up and
+# reporting the readings already on hand.
+_LOCK_WAIT_SECONDS = 20.0
 
 
 def _bucket_for(now_et: datetime) -> str:
@@ -66,6 +85,10 @@ class SnapshotService:
         ``force=True`` always fetches (the manual Refresh). ``force=False`` is the
         opportunistic on-open path: it skips the network fetch if the most recent
         reading is younger than ``STALE_MINUTES``.
+
+        Quoting happens first and writing second (see :meth:`_fetch_quotes`), and
+        only one capture runs at a time — together that keeps the SQLite write
+        lock held for a short burst instead of the whole fetch.
         """
         now = self._now_et()
         latest = (
@@ -76,6 +99,22 @@ class SnapshotService:
         if not force and latest and (now - latest.captured_at) < timedelta(minutes=self.STALE_MINUTES):
             return self.change_since_previous()
 
+        # A capture already in flight is doing this exact work. The manual Refresh
+        # waits for it (the user asked for fresh numbers); the opportunistic path
+        # gives up immediately rather than queueing a second writer behind it.
+        if force:
+            got = _capture_lock.acquire(timeout=_LOCK_WAIT_SECONDS)
+        else:
+            got = _capture_lock.acquire(blocking=False)
+        if not got:
+            return {**self.change_since_previous(), "skipped": "capture already running"}
+        try:
+            return self._capture_now(now)
+        finally:
+            _capture_lock.release()
+
+    def _capture_now(self, now: datetime) -> dict:
+        """Quote every holding, then write the readings in one committed burst."""
         bucket = _bucket_for(now)
         today = now.date()
 
@@ -89,33 +128,58 @@ class SnapshotService:
             if held_ids else []
         )
 
+        quotes = self._fetch_quotes(assets)          # network only — nothing written yet
+
+        try:
+            for asset_id, price in quotes:
+                self._upsert_snapshot(asset_id, today, bucket, price, now)
+                self._upsert_daily_close(asset_id, today, price)
+            # Commit here rather than leaving it to the caller: the writer lock is
+            # taken on the first flush above, and the request that called us may
+            # go on to render pages for several more seconds.
+            self.session.commit()
+        except OperationalError:
+            # Another writer (the history backfill) outlasted busy_timeout. Roll
+            # back so the caller's session stays usable — an un-rolled-back
+            # failure here is what turned a lock wait into an HTTP 500 — and
+            # report the readings we already have.
+            self.session.rollback()
+            return {**self.change_since_previous(), "skipped": "database busy"}
+
+        return self.change_since_previous()
+
+    def _fetch_quotes(self, assets: list[Asset]) -> list[tuple[int, Decimal]]:
+        """Price every holding *before* touching the database.
+
+        Each quote is a network round-trip, so capturing that fetched and wrote in
+        the same loop held SQLite's single writer for the entire loop (minutes on a
+        real portfolio) and every other writer timed out against it. Reading the
+        prices first keeps the write phase down to one short burst.
+        """
+        quotes: list[tuple[int, Decimal]] = []
         yf = None
         for asset in assets:
             sym = (asset.symbol or "").upper()
             if sym in STABLE_VALUE_SYMBOLS:
-                price = Decimal("1")                       # never price cash from yfinance
-            else:
-                # Skip anything no feed can resolve (a CUSIP, a broker subtotal
-                # row like CRM-TOTAL, or a malformed ticker) and use the form
-                # Yahoo expects (BRK/B → BRK-B). Otherwise every capture burns a
-                # round-trip per junk symbol and logs a failure.
-                ysym = yahoo_symbol(asset.symbol)
-                if ysym is None:
+                quotes.append((asset.id, Decimal("1")))    # never price cash from yfinance
+                continue
+            # Skip anything no feed can resolve (a CUSIP, a broker subtotal row
+            # like CRM-TOTAL, or a malformed ticker) and use the form Yahoo
+            # expects (BRK/B → BRK-B). Otherwise every capture burns a round-trip
+            # per junk symbol and logs a failure.
+            ysym = yahoo_symbol(asset.symbol)
+            if ysym is None:
+                continue
+            if yf is None:
+                import yfinance as yf  # noqa: PLC0415 — heavy, import lazily
+            try:
+                hist = yf.Ticker(ysym).history(period="2d")
+                if hist.empty:
                     continue
-                if yf is None:
-                    import yfinance as yf  # noqa: PLC0415 — heavy, import lazily
-                try:
-                    hist = yf.Ticker(ysym).history(period="2d")
-                    if hist.empty:
-                        continue
-                    price = Decimal(str(round(hist.iloc[-1]["Close"], 6)))
-                except Exception:
-                    continue
-            self._upsert_snapshot(asset.id, today, bucket, price, now)
-            self._upsert_daily_close(asset.id, today, price)
-
-        self.session.flush()
-        return self.change_since_previous()
+                quotes.append((asset.id, Decimal(str(round(hist.iloc[-1]["Close"], 6)))))
+            except Exception:
+                continue
+        return quotes
 
     def _find_snapshot(self, asset_id: int, d: date, bucket: str) -> PriceSnapshot | None:
         return (

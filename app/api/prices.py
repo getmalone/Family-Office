@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
@@ -38,16 +39,27 @@ def refresh_prices(db: Session = Depends(get_db)):
         try:
             md = MarketDataService(db)
             md.repair_stable_value_prices()   # scrub any stale CASH/money-market rows back to $1
+            db.commit()                       # that bulk UPDATE takes the single SQLite write
+                                              # lock — let it go before any network work
             if md.history_is_thin():
                 md.backfill_history()
             md.refresh_proxy_prices()         # update price-proxy tickers (401k CIT tracking)
         except Exception:
-            pass
+            # Roll back explicitly: swallowing a failed flush left this session
+            # un-committable, so the capture below then died of PendingRollbackError
+            # and the whole refresh 500'd.
+            db.rollback()
 
         try:
             result = SnapshotService(db).capture(force=True)
         except ImportError:
             return JSONResponse({"error": "yfinance not installed"}, status_code=500)
+        except OperationalError:
+            db.rollback()
+            return JSONResponse(
+                {"error": "database busy — prices were not updated, try again"},
+                status_code=503,
+            )
 
     # Bust the morning brief cache so the next page load reflects the new prices.
     try:
@@ -76,7 +88,7 @@ def resolve_symbols(force: bool = False, db: Session = Depends(get_db)):
             try:
                 MarketDataService(db).backfill_history()
             except Exception:
-                pass
+                db.rollback()      # a half-flushed backfill must not poison this session
     return JSONResponse(report)
 
 
@@ -94,7 +106,7 @@ def apply_suggestion(asset_id: int, db: Session = Depends(get_db)):
         try:
             MarketDataService(db).backfill_history()
         except Exception:
-            pass
+            db.rollback()          # a half-flushed backfill must not poison this session
     return JSONResponse(result)
 
 
