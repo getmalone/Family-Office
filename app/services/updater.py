@@ -143,14 +143,30 @@ def _release_from_api(timeout: float) -> tuple[dict | None, str | None]:
     return None, f"release {tag} has no family-office zip attached"
 
 
+def _cache_busted(url: str) -> str:
+    """Append a throwaway query parameter so no cache can answer the request.
+
+    github.com/<repo>/releases/latest is served from an edge cache that can keep
+    redirecting to the *previous* tag for minutes after a release is published —
+    long enough to tell someone "already up to date" right after an update
+    shipped. A unique query string makes the request its own cache key.
+    """
+    import time
+    import uuid
+
+    token = f"{int(time.time())}{uuid.uuid4().hex[:8]}"
+    return f"{url}{'&' if '?' in url else '?'}_={token}"
+
+
 def _release_from_web(timeout: float) -> tuple[dict | None, str | None]:
     """Fallback: read the tag from github.com's /releases/latest redirect."""
     import httpx
 
     try:
         resp = httpx.get(
-            _WEB_LATEST, timeout=timeout, follow_redirects=False,
-            headers={"User-Agent": "family-office-updater"},
+            _cache_busted(_WEB_LATEST), timeout=timeout, follow_redirects=False,
+            headers={"User-Agent": "family-office-updater",
+                     "Cache-Control": "no-cache", "Pragma": "no-cache"},
         )
     except Exception as exc:  # noqa: BLE001
         return None, f"github.com — {_describe(exc)}"

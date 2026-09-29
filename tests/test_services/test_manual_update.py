@@ -299,3 +299,64 @@ def test_upload_rejects_junk_and_downgrades(fake_install, tmp_path):
     assert not ok and "not newer" in msg
     # A rejected file leaves the install exactly as it was.
     assert (fake_install / "app" / "__init__.py").read_text() == "OLD"
+
+
+# ── The fallback must not be answered from a stale edge cache ────────────────
+
+def test_web_fallback_request_is_cache_busted(monkeypatch):
+    """github.com/<repo>/releases/latest is edge-cached.
+
+    Measured on the v0.1.25 release: the bare URL kept redirecting to
+    .../tag/v0.1.24 for minutes after publishing, while the same URL with a
+    query string redirected to v0.1.25. Users on a network that blocks
+    api.github.com would be told "already up to date" right after a release.
+    """
+    import httpx
+    from urllib.parse import parse_qs, urlparse
+
+    seen = []
+
+    def _get(url, **kw):
+        seen.append((url, kw.get("headers") or {}))
+        if "api.github.com" in url:
+            raise httpx.ConnectError("connection refused")
+        return SimpleNamespace(
+            status_code=302,
+            headers={"location": "https://github.com/getmalone/Family-Office"
+                                 "/releases/tag/v0.1.25"},
+        )
+
+    monkeypatch.setattr(httpx, "get", _get)
+    rel, error = updater.latest_release_detailed()
+    assert error is None and rel["tag"] == "v0.1.25"
+
+    web_url, headers = seen[-1]
+    assert web_url.startswith(updater._WEB_LATEST)
+    query = parse_qs(urlparse(web_url).query)
+    assert query, f"the fallback URL carries no cache-buster: {web_url}"
+    assert headers.get("Cache-Control") == "no-cache"
+
+    # Distinct per call, so a cache keyed on the full URL can never serve two
+    # checks from one answer.
+    updater.latest_release_detailed()
+    assert seen[-1][0] != web_url
+
+    # The link shown to the user stays clean — it's a page to open, not a probe.
+    assert "?" not in updater.RELEASES_PAGE
+
+
+def test_web_fallback_stays_offline_safe_with_the_cache_buster(monkeypatch):
+    """Any failure is still a reason, never an exception."""
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", _responder({
+        "github.com": httpx.ConnectError("getaddrinfo failed"),
+    }))
+    rel, error = updater._release_from_web(1.0)
+    assert rel is None and "could not connect" in error
+
+    monkeypatch.setattr(httpx, "get", _responder({
+        "github.com": SimpleNamespace(status_code=200, headers={}),
+    }))
+    rel, error = updater._release_from_web(1.0)
+    assert rel is None and "HTTP 200" in error
