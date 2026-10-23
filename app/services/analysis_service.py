@@ -75,6 +75,73 @@ ASSET_CLASS_ASSUMPTIONS: dict[str, dict[str, float]] = {
     "other":           {"return": 0.06, "volatility": 0.12},
 }
 
+# Long-run correlations between asset classes (annual returns), used to combine
+# per-class volatilities into portfolio volatility: σ_p² = wᵀ Σ w. Treating the
+# classes as uncorrelated made equity-heavy mixes look far safer than they are
+# (US/international stocks move together ~0.85). Order matches the keys above;
+# missing pairs default to 0. The matrix is checked to be positive semi-definite.
+_CORR_ORDER = list(ASSET_CLASS_ASSUMPTIONS)
+_CORR_PAIRS: dict[tuple[str, str], float] = {
+    ("us_equity", "intl_equity"): 0.85, ("us_equity", "fixed_income"): 0.10,
+    ("us_equity", "real_estate"): 0.65, ("us_equity", "private_equity"): 0.75,
+    ("us_equity", "venture_capital"): 0.60, ("us_equity", "hedge_fund"): 0.65,
+    ("us_equity", "commodity"): 0.30, ("us_equity", "crypto"): 0.35,
+    ("us_equity", "alternative"): 0.50, ("us_equity", "other"): 0.60,
+    ("intl_equity", "fixed_income"): 0.10, ("intl_equity", "real_estate"): 0.60,
+    ("intl_equity", "private_equity"): 0.70, ("intl_equity", "venture_capital"): 0.55,
+    ("intl_equity", "hedge_fund"): 0.60, ("intl_equity", "commodity"): 0.40,
+    ("intl_equity", "crypto"): 0.30, ("intl_equity", "alternative"): 0.50,
+    ("intl_equity", "other"): 0.60,
+    ("fixed_income", "real_estate"): 0.25, ("fixed_income", "hedge_fund"): 0.10,
+    ("fixed_income", "cash"): 0.10, ("fixed_income", "alternative"): 0.20,
+    ("fixed_income", "other"): 0.30,
+    ("real_estate", "private_equity"): 0.55, ("real_estate", "venture_capital"): 0.45,
+    ("real_estate", "hedge_fund"): 0.45, ("real_estate", "commodity"): 0.30,
+    ("real_estate", "crypto"): 0.25, ("real_estate", "alternative"): 0.50,
+    ("real_estate", "other"): 0.50,
+    ("private_equity", "venture_capital"): 0.75, ("private_equity", "hedge_fund"): 0.55,
+    ("private_equity", "commodity"): 0.25, ("private_equity", "crypto"): 0.30,
+    ("private_equity", "alternative"): 0.50, ("private_equity", "other"): 0.50,
+    ("venture_capital", "hedge_fund"): 0.45, ("venture_capital", "commodity"): 0.20,
+    ("venture_capital", "crypto"): 0.35, ("venture_capital", "alternative"): 0.45,
+    ("venture_capital", "other"): 0.45,
+    ("hedge_fund", "commodity"): 0.30, ("hedge_fund", "crypto"): 0.30,
+    ("hedge_fund", "alternative"): 0.50, ("hedge_fund", "other"): 0.45,
+    ("commodity", "crypto"): 0.20, ("commodity", "alternative"): 0.30,
+    ("commodity", "other"): 0.30,
+    ("crypto", "alternative"): 0.25, ("crypto", "other"): 0.30,
+    ("alternative", "other"): 0.50,
+}
+
+
+def asset_class_correlation(a: str, b: str) -> float:
+    """Assumed long-run correlation between two asset classes (unknown → 'other')."""
+    a = a if a in ASSET_CLASS_ASSUMPTIONS else "other"
+    b = b if b in ASSET_CLASS_ASSUMPTIONS else "other"
+    if a == b:
+        return 1.0
+    return _CORR_PAIRS.get((a, b), _CORR_PAIRS.get((b, a), 0.0))
+
+
+def portfolio_return_and_vol(allocation: dict[str, float]) -> tuple[float, float]:
+    """Expected simple annual return and volatility of an asset-class mix.
+
+    Weights are normalised; volatility uses the correlation table above
+    (σ_p² = Σᵢ Σⱼ wᵢ wⱼ σᵢ σⱼ ρᵢⱼ). An empty mix falls back to 4% / 5%.
+    """
+    items = [(ac, wt) for ac, wt in allocation.items() if wt > 0]
+    if not items:
+        return 0.04, 0.05
+    classes = [ac for ac, _ in items]
+    w = np.array([wt for _, wt in items], dtype=float)
+    w = w / w.sum()
+    params = [ASSET_CLASS_ASSUMPTIONS.get(ac, ASSET_CLASS_ASSUMPTIONS["other"]) for ac in classes]
+    mu = np.array([p["return"] for p in params])
+    sig = np.array([p["volatility"] for p in params])
+    corr = np.array([[asset_class_correlation(a, b) for b in classes] for a in classes])
+    cov = np.outer(sig, sig) * corr
+    return float(w @ mu), float(np.sqrt(max(float(w @ cov @ w), 0.0)))
+
 # Default target allocations for the 5 system profiles.
 DEFAULT_PROFILES: list[dict] = [
     {
@@ -937,11 +1004,12 @@ class AnalysisService:
                 from app.services.markov_regime_service import MarkovRegimeService
                 from app.services.market_data import stored_price_map
                 symbols = [h.symbol for h in summary.holdings if h.symbol]
-                weights = {
-                    h.symbol: float(h.market_value) / initial_value
-                    for h in summary.holdings
-                    if h.symbol and float(h.market_value) > 0
-                }
+                # Holdings are per (asset, account): sum a symbol held in several
+                # accounts instead of letting the last account overwrite the rest.
+                weights: dict[str, float] = {}
+                for h in summary.holdings:
+                    if h.symbol and float(h.market_value) > 0:
+                        weights[h.symbol] = weights.get(h.symbol, 0.0) + float(h.market_value) / initial_value
                 if symbols:
                     # Stored history only — same source the morning brief uses.
                     # This used to be a live 2-year yf.download of every raw
@@ -979,61 +1047,45 @@ class AnalysisService:
         spouse_claiming_age: int | None = None,
         spouse_current_age: int | None = None,
         spouse_fra_age: int = 67,
+        income_bridge: bool = False,
+        bucket_balances: dict[str, float] | None = None,
+        deferred_tax_rate: float = 0.18,
+        taxable_tax_rate: float = 0.10,
         target_survival: float = 85.0,
         max_rate: float = 20.0,
     ) -> "MaxSpendingResult":
         """Find the highest withdrawal rate keeping portfolio survival ≥ target.
 
-        Survival is monotonically decreasing in the withdrawal rate, so we binary-
-        search the rate (reusing the same simulation engine, regime, and SSA/age
-        scenario as the displayed run) for the crossing point.
+        Uses exactly the displayed run's scenario (_mc_scenario: ages, household
+        SSA, income bridge, taxes, buckets). With a fixed-dollar withdrawal and
+        common random numbers, survival falls as the rate rises, so a binary
+        search finds the crossing point.
         """
         from app.schemas.analysis import MaxSpendingResult
 
-        summary = self.portfolio_svc.get_summary()
-        initial_value = float(summary.total_market_value) or 1.0
-        regime = self._resolve_portfolio_regime(summary, initial_value, regime_override)
-        current_alloc = {k: float(v) / 100 for k, v in summary.allocation.items()}
-
-        if current_age is not None and retirement_age is not None:
-            years = max(0, int(retirement_age) - int(current_age))
-
-        ssa_factor: float | None = None
-        if (ssa_monthly_fra and float(ssa_monthly_fra) > 0
-                and ssa_claiming_age is not None and retirement_age is not None):
-            ssa_factor = self._ssa_claiming_factor(int(ssa_claiming_age), int(fra_age))
-
-        wy = int(withdrawal_years)
-        # Same household (one- or two-earner) schedule as run_monte_carlo, so the
-        # solver sees both checks during the joint lifetime, not just the primary's.
-        ssa_schedule, ssa_household = self._household_ssa(
-            withdrawal_years=wy,
-            accumulation_years=years,
-            retirement_age=int(retirement_age) if retirement_age is not None else None,
-            primary_monthly_fra=float(ssa_monthly_fra),
-            primary_claiming_age=int(ssa_claiming_age) if ssa_claiming_age is not None else None,
-            primary_fra_age=int(fra_age),
-            spouse_monthly_fra=float(spouse_monthly_fra),
-            spouse_claiming_age=int(spouse_claiming_age) if spouse_claiming_age is not None else None,
-            spouse_current_age=int(spouse_current_age) if spouse_current_age is not None else None,
-            spouse_fra_age=int(spouse_fra_age),
+        sc = self._mc_scenario(
+            years=years, withdrawal_years=withdrawal_years, regime_override=regime_override,
+            current_age=current_age, retirement_age=retirement_age,
+            ssa_claiming_age=ssa_claiming_age, ssa_monthly_fra=ssa_monthly_fra, fra_age=fra_age,
+            spouse_monthly_fra=spouse_monthly_fra, spouse_claiming_age=spouse_claiming_age,
+            spouse_current_age=spouse_current_age, spouse_fra_age=spouse_fra_age,
+            income_bridge=income_bridge, bucket_balances=bucket_balances,
+            deferred_tax_rate=deferred_tax_rate, taxable_tax_rate=taxable_tax_rate,
         )
-        ca = int(current_age) if current_age is not None else None
-        ra = int(retirement_age) if retirement_age is not None else None
-        sca = int(ssa_claiming_age) if ssa_claiming_age is not None else None
+        wy = int(withdrawal_years)
         target = float(target_survival)
 
         def _sim_at(rate: float):
             return self._simulate(
-                label="solve", allocation=current_alloc, initial_value=initial_value,
-                years=years, num_simulations=num_simulations, goal_amount=None,
-                regime=regime, monthly_contribution=float(monthly_contribution),
+                label="solve", allocation=sc["allocation"], initial_value=sc["initial_value"],
+                years=sc["years"], num_simulations=num_simulations, goal_amount=None,
+                regime=sc["regime"], monthly_contribution=float(monthly_contribution),
                 withdrawal_rate=rate, withdrawal_years=wy,
                 spending_pattern=spending_pattern,
                 smile_slow_pct=smile_slow_pct, smile_no_pct=smile_no_pct,
-                current_age=ca, retirement_age=ra, ssa_claiming_age=sca,
-                ssa_fra_factor=ssa_factor,
-                ssa_schedule=ssa_schedule, ssa_household=ssa_household,
+                current_age=sc["current_age"], retirement_age=sc["retirement_age"],
+                ssa_claiming_age=sc["ssa_claiming_age"], ssa_fra_factor=sc["ssa_fra_factor"],
+                **sc["shared_kwargs"],
             )
 
         def _survival(rate: float) -> float:
@@ -1041,6 +1093,8 @@ class AnalysisService:
             return float(r.portfolio_survival_rate or 0.0)
 
         # Binary search for the highest rate whose survival is still ≥ target.
+        # The lowest rate tried (~0) must meet the target, else it's unreachable.
+        reachable = True
         if _survival(max_rate) >= target:
             best = max_rate
         else:
@@ -1052,6 +1106,7 @@ class AnalysisService:
                 else:
                     hi = mid
             best = lo
+            reachable = _survival(best) >= target
 
         r = _sim_at(best)
         annual = r.withdrawal_annual_amount or Decimal("0")
@@ -1063,45 +1118,34 @@ class AnalysisService:
             achieved_survival=r.portfolio_survival_rate or Decimal("0"),
             ssa_annual_benefit=r.ssa_annual_benefit,
             withdrawal_years=wy,
+            target_reachable=reachable,
+            income_bridge=bool(r.income_bridge),
         )
 
-    def run_monte_carlo(
+    def _mc_scenario(
         self,
-        years: int = 10,
-        num_simulations: int = 1000,
-        goal_amount: Decimal | None = None,
-        include_target: bool = True,
-        monthly_contribution: Decimal = Decimal("0"),
-        withdrawal_rate: Decimal = Decimal("0"),
-        withdrawal_years: int = 0,
-        regime_override: str | None = None,  # "bull" | "sideways" | "bear" | "base" | None=auto
-        spending_pattern: str = "constant",  # "constant" | "smile"
-        smile_slow_pct: float = 80.0,
-        smile_no_pct: float = 65.0,
-        current_age: int | None = None,
-        retirement_age: int | None = None,
-        ssa_claiming_age: int | None = None,
-        ssa_monthly_fra: Decimal = Decimal("0"),  # est. monthly benefit at Full Retirement Age (67)
-        fra_age: int = 67,                                  # primary's full retirement age (66–67)
-        spouse_monthly_fra: Decimal = Decimal("0"),         # spouse benefit at their FRA ($/mo)
-        spouse_claiming_age: int | None = None,             # spouse claims at this age (62–70)
-        spouse_current_age: int | None = None,              # spouse's age today (places them on the timeline)
-        spouse_fra_age: int = 67,                           # spouse's full retirement age (66–67)
-        income_bridge: bool = False,                       # model account-type withdrawal sequencing + taxes
-        bucket_balances: dict[str, float] | None = None,   # taxable/traditional/roth $; auto-derived if None
-        deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
-        taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
-    ) -> MonteCarloComparison:
-        """
-        Run Monte Carlo simulation for current allocation and optionally target.
-
-        Uses geometric Brownian motion with annual steps. Per-asset-class return
-        and volatility are from historical data or ASSET_CLASS_ASSUMPTIONS.
-
-        Applies Markov regime conditioning to the first 2 years of the simulation:
-          Bull  regime → +2% expected return boost, −10% volatility (year 1: full, year 2: half)
-          Bear  regime → −3% return drag,           +20% volatility
-          Sideways     → base assumptions
+        *,
+        years: int,
+        withdrawal_years: int,
+        regime_override: str | None,
+        current_age: int | None,
+        retirement_age: int | None,
+        ssa_claiming_age: int | None,
+        ssa_monthly_fra: Decimal,
+        fra_age: int,
+        spouse_monthly_fra: Decimal,
+        spouse_claiming_age: int | None,
+        spouse_current_age: int | None,
+        spouse_fra_age: int,
+        income_bridge: bool,
+        bucket_balances: dict[str, float] | None,
+        deferred_tax_rate: float,
+        taxable_tax_rate: float,
+    ) -> dict:
+        """Everything a Monte Carlo run needs besides the allocation and the
+        withdrawal rate: starting value, regime, timeline, household SSA
+        schedule and income-bridge buckets. Shared by run_monte_carlo and
+        solve_max_spending so the solver always tests the displayed scenario.
         """
         summary = self.portfolio_svc.get_summary()
         initial_value = float(summary.total_market_value)
@@ -1113,8 +1157,6 @@ class AnalysisService:
         # Current allocation weights
         current_alloc = {k: float(v) / 100 for k, v in summary.allocation.items()}
 
-        monthly_contrib_float  = float(monthly_contribution)
-        withdrawal_rate_float  = float(withdrawal_rate)
         withdrawal_years_int   = int(withdrawal_years)
 
         # ── Retirement timeline & Social Security ─────────────────────────────
@@ -1174,6 +1216,69 @@ class AnalysisService:
             deferred_tax_rate=deferred_tax_rate,
             taxable_tax_rate=taxable_tax_rate,
         )
+        return dict(
+            initial_value=initial_value, regime=portfolio_regime, allocation=current_alloc,
+            years=years, current_age=ca, retirement_age=ra, ssa_claiming_age=sca,
+            ssa_fra_factor=ssa_fra_factor, shared_kwargs=shared_kwargs,
+        )
+
+    def run_monte_carlo(
+        self,
+        years: int = 10,
+        num_simulations: int = 1000,
+        goal_amount: Decimal | None = None,
+        include_target: bool = True,
+        monthly_contribution: Decimal = Decimal("0"),
+        withdrawal_rate: Decimal = Decimal("0"),
+        withdrawal_years: int = 0,
+        regime_override: str | None = None,  # "bull" | "sideways" | "bear" | "base" | None=auto
+        spending_pattern: str = "constant",  # "constant" | "smile"
+        smile_slow_pct: float = 80.0,
+        smile_no_pct: float = 65.0,
+        current_age: int | None = None,
+        retirement_age: int | None = None,
+        ssa_claiming_age: int | None = None,
+        ssa_monthly_fra: Decimal = Decimal("0"),  # est. monthly benefit at Full Retirement Age (67)
+        fra_age: int = 67,                                  # primary's full retirement age (66–67)
+        spouse_monthly_fra: Decimal = Decimal("0"),         # spouse benefit at their FRA ($/mo)
+        spouse_claiming_age: int | None = None,             # spouse claims at this age (62–70)
+        spouse_current_age: int | None = None,              # spouse's age today (places them on the timeline)
+        spouse_fra_age: int = 67,                           # spouse's full retirement age (66–67)
+        income_bridge: bool = False,                       # model account-type withdrawal sequencing + taxes
+        bucket_balances: dict[str, float] | None = None,   # taxable/traditional/roth $; auto-derived if None
+        deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
+        taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
+    ) -> MonteCarloComparison:
+        """
+        Run Monte Carlo simulation for current allocation and optionally target.
+
+        Uses geometric Brownian motion with annual steps. Per-asset-class return
+        and volatility are from historical data or ASSET_CLASS_ASSUMPTIONS.
+
+        Applies Markov regime conditioning to the first 2 years of the simulation:
+          Bull  regime → +2% expected return boost, −10% volatility (year 1: full, year 2: half)
+          Bear  regime → −3% return drag,           +20% volatility
+          Sideways     → base assumptions
+        """
+        sc = self._mc_scenario(
+            years=years, withdrawal_years=withdrawal_years, regime_override=regime_override,
+            current_age=current_age, retirement_age=retirement_age,
+            ssa_claiming_age=ssa_claiming_age, ssa_monthly_fra=ssa_monthly_fra, fra_age=fra_age,
+            spouse_monthly_fra=spouse_monthly_fra, spouse_claiming_age=spouse_claiming_age,
+            spouse_current_age=spouse_current_age, spouse_fra_age=spouse_fra_age,
+            income_bridge=income_bridge, bucket_balances=bucket_balances,
+            deferred_tax_rate=deferred_tax_rate, taxable_tax_rate=taxable_tax_rate,
+        )
+        initial_value = sc["initial_value"]
+        portfolio_regime = sc["regime"]
+        current_alloc = sc["allocation"]
+        years = sc["years"]
+        ca, ra, sca = sc["current_age"], sc["retirement_age"], sc["ssa_claiming_age"]
+        ssa_fra_factor = sc["ssa_fra_factor"]
+        shared_kwargs = sc["shared_kwargs"]
+        monthly_contrib_float  = float(monthly_contribution)
+        withdrawal_rate_float  = float(withdrawal_rate)
+        withdrawal_years_int   = int(withdrawal_years)
 
         # Run simulation for current allocation
         current_result = self._simulate(
@@ -1330,17 +1435,19 @@ class AnalysisService:
         benefit, floored at 82.5% of their PIA (the widow(er)'s limit).
 
         Returns (annual $ per distribution year, summary). The summary is None
-        when there's no spouse, so the single-stream behavior is unchanged.
+        when there's no spouse, so the single-stream behavior is unchanged. A
+        spouse counts once their current and claiming ages are given, even with
+        no benefit of their own ($0): they can still collect the spousal benefit.
         """
         def _dec(x) -> Decimal:
             return Decimal(str(round(float(x), 2)))
 
         primary_on = (primary_monthly_fra > 0 and primary_claiming_age is not None
                       and retirement_age is not None and withdrawal_years > 0)
-        spouse_on = (spouse_monthly_fra > 0 and spouse_claiming_age is not None
+        spouse_on = (spouse_monthly_fra >= 0 and spouse_claiming_age is not None
                      and spouse_current_age is not None and retirement_age is not None
                      and withdrawal_years > 0)
-        if not primary_on and not spouse_on:
+        if not primary_on and not (spouse_on and spouse_monthly_fra > 0):
             return [0.0] * withdrawal_years, None
 
         def _person(monthly_fra, claiming_age, fra_age, age_at):
@@ -1405,18 +1512,21 @@ class AnalysisService:
             )
 
         household = None
-        if pri and spo:
-            people = [_to_person(pri, "You", topup_target == "primary"),
-                      _to_person(spo, "Spouse", topup_target == "spouse")]
-            # Survivor (higher earner dies first, survivor at their own FRA): the
-            # deceased's actual benefit, but never less than 82.5% of their PIA
-            # when they had claimed early (the widow(er)'s limit); the survivor
-            # keeps their own benefit instead if that's larger.
-            higher = pri if pri["monthly_fra"] >= spo["monthly_fra"] else spo
-            lower = spo if higher is pri else pri
-            widow_monthly = (max(higher["own_monthly"], 0.825 * higher["monthly_fra"])
-                             if higher["factor"] < 1.0 else higher["own_monthly"])
-            survivor_monthly = max(widow_monthly, lower["own_monthly"])
+        if spo:
+            people = ([_to_person(pri, "You", topup_target == "primary")] if pri else []) + [
+                _to_person(spo, "Spouse", topup_target == "spouse")]
+            if pri:
+                # Survivor (higher earner dies first, survivor at their own FRA):
+                # the deceased's actual benefit, but never less than 82.5% of their
+                # PIA when they had claimed early (the widow(er)'s limit); the
+                # survivor keeps their own benefit instead if that's larger.
+                higher = pri if pri["monthly_fra"] >= spo["monthly_fra"] else spo
+                lower = spo if higher is pri else pri
+                widow_monthly = (max(higher["own_monthly"], 0.825 * higher["monthly_fra"])
+                                 if higher["factor"] < 1.0 else higher["own_monthly"])
+                survivor_monthly = max(widow_monthly, lower["own_monthly"])
+            else:
+                survivor_monthly = spo["own_monthly"]   # only the spouse has a record
             first = next((y for y in range(withdrawal_years) if ssa_per_year[y] > 0), None)
             # Runs of equal household income, so staggered claim dates are visible
             # (e.g. one check for two years before the second starts).
@@ -1451,7 +1561,7 @@ class AnalysisService:
         num_simulations: int,
         retirement_age: int | None,
         ssa_claiming_age: int | None,
-    ) -> "tuple[np.ndarray, IncomeBridge]":
+    ) -> "tuple[np.ndarray, IncomeBridge, np.ndarray]":
         """Distribution phase with account-type buckets and ordered, taxed
         withdrawals — taxable → traditional → Roth.
 
@@ -1464,9 +1574,9 @@ class AnalysisService:
         that year and the portfolio is at ruin.
 
         Returns the per-year total-portfolio values (same shape the single-pooled
-        path produces, so the fan chart and summary stats are unchanged) plus an
+        path produces, so the fan chart and summary stats are unchanged), an
         IncomeBridge summary of medians answering "which accounts fund the
-        pre-SSA years".
+        pre-SSA years", and each simulation's total net (after-tax) draw.
         """
         def _d(x) -> Decimal:
             return Decimal(str(round(float(x), 2)))
@@ -1491,6 +1601,8 @@ class AnalysisService:
 
         dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
         taxes_per_sim = np.zeros(num_simulations, dtype=float)
+        net_drawn_per_sim = np.zeros(num_simulations, dtype=float)
+        gross_by_year = np.zeros((num_simulations, withdrawal_years), dtype=float)
         funding_by_year: list[BridgeYearFunding] = []
         depletes_year: dict[str, int | None] = {b: None for b in order}
 
@@ -1511,18 +1623,25 @@ class AnalysisService:
                 buckets[b] = buckets[b] - gross_taken
                 taxes_per_sim += gross_taken - net_delivered
                 need = need - net_delivered
+                net_drawn_per_sim += net_delivered
                 gross_by_src[b] = gross_taken
 
             dist_values[:, y] = buckets["taxable"] + buckets["traditional"] + buckets["roth"]
 
+            # Per-bucket medians taken separately don't add up when simulations
+            # draw from different buckets in the same year, so report the split
+            # of the simulation whose total gross draw is the median.
+            total_y = gross_by_src["taxable"] + gross_by_src["traditional"] + gross_by_src["roth"]
+            gross_by_year[:, y] = total_y
+            mid = int(np.argsort(total_y)[num_simulations // 2])
             age = (retirement_age + y) if retirement_age is not None else None
             funding_by_year.append(BridgeYearFunding(
                 year=y + 1,
                 age=age,
                 ssa=_d(ssa_per_year[y]),
-                taxable=_d(np.median(gross_by_src["taxable"])),
-                traditional=_d(np.median(gross_by_src["traditional"])),
-                roth=_d(np.median(gross_by_src["roth"])),
+                taxable=_d(gross_by_src["taxable"][mid]),
+                traditional=_d(gross_by_src["traditional"][mid]),
+                roth=_d(gross_by_src["roth"][mid]),
             ))
             for b in order:
                 if depletes_year[b] is None and props[b] > 0 and float(np.median(buckets[b])) <= 0.0:
@@ -1540,12 +1659,10 @@ class AnalysisService:
             annual_wdraw * smile_mults[0] - ssa_per_year[0], 0.0)))
             if withdrawal_years else 0.0)
 
-        # Total gross capital to fund the pre-SSA window = sum of median gross
-        # draws (all sources) across the bridge years.
-        bridge_number = sum(
-            float(r.taxable) + float(r.traditional) + float(r.roth)
-            for r in funding_by_year[:bridge_years]
-        )
+        # Total gross capital to fund the pre-SSA window = median across
+        # simulations of each one's gross draws over the bridge years.
+        bridge_number = (float(np.median(gross_by_year[:, :bridge_years].sum(axis=1)))
+                         if bridge_years > 0 else 0.0)
         bridge_coverage = (float(np.mean(dist_values[:, bridge_years - 1] > 0) * 100.0)
                            if bridge_years > 0 else 100.0)
 
@@ -1575,7 +1692,7 @@ class AnalysisService:
             taxes_total_median=_d(np.median(taxes_per_sim)),
             funding_by_year=funding_by_year,
         )
-        return dist_values, bridge
+        return dist_values, bridge, net_drawn_per_sim
 
     def _simulate(
         self,
@@ -1630,43 +1747,25 @@ class AnalysisService:
         A portfolio reaching 0 stays at 0 ("ruin" event).  The survival rate
         is the fraction of simulations that end the distribution phase > 0.
         """
-        # Build per-asset-class return/volatility vectors
-        ac_weights = []
-        ac_returns = []
-        ac_vols = []
+        # Portfolio expected (simple) annual return and correlation-aware volatility.
+        port_mu, port_sigma = portfolio_return_and_vol(allocation)
 
-        for ac, weight in allocation.items():
-            if weight <= 0:
-                continue
-            assumptions = ASSET_CLASS_ASSUMPTIONS.get(ac, ASSET_CLASS_ASSUMPTIONS["other"])
-            ac_weights.append(weight)
-            ac_returns.append(assumptions["return"])
-            ac_vols.append(assumptions["volatility"])
+        def _log_drift(mu_simple: float, sig: float) -> float:
+            # Log-normal annual growth whose mean is 1 + mu_simple:
+            # E[exp(N(m, σ²))] = exp(m + σ²/2) = 1 + mu  ⇒  m = ln(1 + mu) − σ²/2.
+            return float(np.log1p(mu_simple)) - 0.5 * sig ** 2
 
-        if not ac_weights:
-            ac_weights = [1.0]
-            ac_returns = [0.04]
-            ac_vols = [0.05]
-
-        w = np.array(ac_weights)
-        w = w / w.sum()  # normalize
-        mu = np.array(ac_returns)
-        sigma = np.array(ac_vols)
-
-        # Portfolio expected return and volatility (simplified: uncorrelated assumption)
-        port_mu = float(w @ mu)
-        port_sigma = float(np.sqrt((w ** 2) @ (sigma ** 2)))
-
-        # Simulate: proper log-normal Geometric Brownian Motion with Ito correction.
-        # drift = mu − 0.5 σ² ensures E[S_t] = S_0 · exp(mu · t)
+        # Simulate: log-normal Geometric Brownian Motion (annual steps).
         rng = np.random.default_rng(seed=42)
-        drift = port_mu - 0.5 * (port_sigma ** 2)
+        drift = _log_drift(port_mu, port_sigma)
         # Shape: (num_simulations, years)
         log_returns = rng.normal(drift, port_sigma, size=(num_simulations, years))
 
         # ── Regime conditioning — override first 2 years ──────────────────────
         # Blend schedule: year 0 = 100 % regime, year 1 = 50 %, year 2+ = base
         regime_context = "Base"
+        regime_adj: dict[str, float] | None = None
+        blend_schedule = [1.0, 0.5]  # regime weight in sim years 1 and 2, then base
         if regime is not None:
             regime_context = regime.current_regime
             REGIME_ADJ = {
@@ -1675,13 +1774,13 @@ class AnalysisService:
                 "Bear":     {"mu_delta": -0.03, "sigma_factor": 1.20},
             }
             adj = REGIME_ADJ.get(regime.current_regime, {"mu_delta": 0.0, "sigma_factor": 1.0})
-            blend_schedule = [1.0, 0.5]  # only override years 0 and 1
+            regime_adj = adj
             for y, blend in enumerate(blend_schedule[:years]):
                 if blend == 0:
                     continue
                 adj_mu     = port_mu + blend * adj["mu_delta"]
                 adj_sigma  = port_sigma * (1.0 + blend * (adj["sigma_factor"] - 1.0))
-                adj_drift  = adj_mu - 0.5 * adj_sigma ** 2
+                adj_drift  = _log_drift(adj_mu, adj_sigma)
                 log_returns[:, y] = rng.normal(adj_drift, adj_sigma, num_simulations)
 
         # ── Compound log-returns → portfolio values ───────────────────────────
@@ -1742,21 +1841,23 @@ class AnalysisService:
         income_bridge_out: IncomeBridge | None = None
 
         if withdrawal_rate > 0 and withdrawal_years > 0:
-            # Per-simulation annual withdrawal: constant dollar amount based on
-            # each simulation's own ending accumulation value (Go-Go rate).
-            annual_wdraw = final_vals * (withdrawal_rate / 100.0)  # shape: (num_sims,)
+            # One Go-Go spending amount for every simulation: the rate applied to
+            # the MEDIAN retirement balance. (Scaling each path's spending to its
+            # own balance hid all accumulation risk: a bad market just lowered
+            # spending instead of threatening survival.)
+            annual_wdraw = np.full(num_simulations,
+                                   float(np.median(final_vals)) * (withdrawal_rate / 100.0))
 
             # ── Spending Smile: build per-year multipliers ────────────────────
-            # Split distribution years into thirds: Go-Go (1.0×) → Slow-Go → No-Go
+            # Split distribution years into thirds: Go-Go (1.0×) → Slow-Go → No-Go.
+            # Any remainder goes to Go-Go then Slow-Go (10 yrs → 4/3/3, 4 → 2/1/1).
             import math as _math
             smile_mults = np.ones(withdrawal_years)
             go_go_yrs = slow_go_yrs = 0
             if spending_pattern == "smile" and withdrawal_years > 0:
                 go_go_yrs   = _math.ceil(withdrawal_years / 3)
-                slow_go_yrs = _math.ceil(withdrawal_years / 3)
-                # Guard: go-go + slow-go must not consume all years
-                if go_go_yrs + slow_go_yrs >= withdrawal_years:
-                    slow_go_yrs = max(0, withdrawal_years - go_go_yrs)
+                no_go_yrs   = withdrawal_years // 3
+                slow_go_yrs = withdrawal_years - go_go_yrs - no_go_yrs
                 for y in range(withdrawal_years):
                     if y < go_go_yrs:
                         smile_mults[y] = 1.0
@@ -1765,11 +1866,21 @@ class AnalysisService:
                     else:
                         smile_mults[y] = smile_no_pct / 100.0
 
-            # Fresh base-case growth factors for the distribution phase
-            # (no regime conditioning — we're past the 2-year regime window)
-            dist_drift = port_mu - 0.5 * (port_sigma ** 2)
-            dist_log_rets = rng.normal(dist_drift, port_sigma,
+            # Fresh base-case growth factors for the distribution phase. The
+            # regime window is the first 2 years of the whole simulation, so a
+            # short (or no) accumulation phase carries it into retirement.
+            dist_log_rets = rng.normal(_log_drift(port_mu, port_sigma), port_sigma,
                                        size=(num_simulations, withdrawal_years))
+            if regime_adj is not None:
+                for y in range(withdrawal_years):
+                    t = years + y
+                    if t >= len(blend_schedule):
+                        break
+                    blend = blend_schedule[t]
+                    adj_sigma = port_sigma * (1.0 + blend * (regime_adj["sigma_factor"] - 1.0))
+                    dist_log_rets[:, y] = rng.normal(
+                        _log_drift(port_mu + blend * regime_adj["mu_delta"], adj_sigma),
+                        adj_sigma, num_simulations)
             dist_gf = np.exp(dist_log_rets)
 
             # ── Social Security income offset ──────────────────────────────────
@@ -1803,7 +1914,7 @@ class AnalysisService:
                 # with a simple effective-tax gross-up. Answers "which accounts
                 # fund the pre-SSA years". Treats the smile-adjusted withdrawal as
                 # the household's *after-tax* spending need.
-                dist_values, income_bridge_out = self._run_income_bridge(
+                dist_values, income_bridge_out, drawn_per_sim = self._run_income_bridge(
                     final_vals=final_vals,
                     annual_wdraw=annual_wdraw,
                     smile_mults=smile_mults,
@@ -1820,12 +1931,15 @@ class AnalysisService:
             else:
                 port_d = final_vals.copy()
                 dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
+                drawn_per_sim = np.zeros(num_simulations)
                 for y in range(withdrawal_years):
                     # End-of-year: portfolio grows first; the smile-adjusted spending
                     # need is met from SSA first, then the portfolio covers the rest.
                     spending_need  = annual_wdraw * smile_mults[y]                  # per-sim ($)
                     portfolio_draw = np.maximum(spending_need - ssa_per_year[y], 0.0)
-                    port_d = np.maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)
+                    grown = port_d * dist_gf[:, y]
+                    drawn_per_sim += np.minimum(grown, portfolio_draw)              # what was actually paid
+                    port_d = np.maximum(grown - portfolio_draw, 0.0)
                     dist_values[:, y] = port_d
 
             # First point: retirement starting value = end of accumulation.
@@ -1856,9 +1970,9 @@ class AnalysisService:
             final_d   = dist_values[:, -1]
             survival  = float(np.mean(final_d > 0) * 100)
 
-            # Total withdrawn = Go-Go rate × sum of smile multipliers
-            # (accounts for step-downs in Slow-Go and No-Go phases)
-            total_distributed = med_wdraw * float(np.sum(smile_mults))
+            # Total actually drawn from the portfolio (median across sims): net of
+            # the spending Social Security covered, and stopping at depletion.
+            total_distributed = float(np.median(drawn_per_sim))
 
             # ── Social Security summary (deterministic across sims) ────────────
             # Derived from the per-year array so one or two earners are handled

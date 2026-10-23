@@ -304,12 +304,14 @@ class SsaHousehold(BaseModel):
 class MaxSpendingResult(BaseModel):
     """Highest sustainable spending for a target portfolio survival rate."""
     target_survival: Decimal                 # e.g. 85 (%)
-    max_withdrawal_rate: Decimal             # % of retirement-date portfolio
-    annual_amount: Decimal                   # median Go-Go annual spend at that rate
+    max_withdrawal_rate: Decimal             # % of the median retirement-date portfolio
+    annual_amount: Decimal                   # Go-Go annual spending at that rate (SSA included)
     monthly_amount: Decimal
     achieved_survival: Decimal               # survival at the solved rate (≈ target)
-    ssa_annual_benefit: Decimal | None = None
+    ssa_annual_benefit: Decimal | None = None  # household SSA once every check has started
     withdrawal_years: int = 0
+    target_reachable: bool = True            # False → even ~0% spending misses the target
+    income_bridge: bool = False              # solved with account sequencing + taxes
 
 
 class MonteCarloComparison(BaseModel):

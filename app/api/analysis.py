@@ -419,6 +419,12 @@ def api_max_spending(
     spouse_claiming_age: int | None = Query(None, ge=62, le=70),
     spouse_current_age: int | None = Query(None, ge=18, le=100),
     spouse_fra_age: int = Query(67, ge=66, le=67),
+    income_bridge: bool = Query(False),
+    deferred_tax_rate: float = Query(18.0, ge=0, le=50),
+    taxable_tax_rate: float = Query(10.0, ge=0, le=50),
+    bucket_taxable: str | None = Query(None),
+    bucket_traditional: str | None = Query(None),
+    bucket_roth: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """Highest sustainable spending that keeps survival ≥ target (%) — JSON."""
@@ -435,6 +441,15 @@ def api_max_spending(
     regime_ov = regime_override.lower().strip() if regime_override else None
     if regime_ov == "auto":
         regime_ov = None
+
+    # Same manual-bucket rule as the page: any override → use them verbatim.
+    bucket_overrides: dict[str, float] | None = None
+    if income_bridge and any(v is not None and v.strip() for v in (bucket_taxable, bucket_traditional, bucket_roth)):
+        bucket_overrides = {
+            "taxable": float(_to_decimal(bucket_taxable) or 0),
+            "traditional": float(_to_decimal(bucket_traditional) or 0),
+            "roth": float(_to_decimal(bucket_roth) or 0),
+        }
 
     result = svc.solve_max_spending(
         years=years,
@@ -454,6 +469,10 @@ def api_max_spending(
         spouse_claiming_age=spouse_claiming_age,
         spouse_current_age=spouse_current_age,
         spouse_fra_age=spouse_fra_age,
+        income_bridge=income_bridge,
+        bucket_balances=bucket_overrides,
+        deferred_tax_rate=deferred_tax_rate / 100.0,
+        taxable_tax_rate=taxable_tax_rate / 100.0,
         target_survival=target,
     )
     return JSONResponse(content=result.model_dump(mode="json"))

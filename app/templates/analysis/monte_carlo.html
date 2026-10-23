@@ -172,7 +172,8 @@
         </div>
         <div class="flex flex-wrap items-end gap-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700">Annual Withdrawal Rate (%)</label>
+            <label class="block text-sm font-medium text-gray-700"
+                   title="Year-one spending as a % of the median portfolio value at retirement. The same dollar amount is tested in every simulation, so a poor market before or after retirement shows up as lower survival.">Annual Withdrawal Rate (%)</label>
             <input type="number" name="withdrawal_rate"
                    value="{{ withdrawal_rate or '' }}"
                    min="0" max="20" step="0.5" placeholder="e.g. 4.0 — leave blank to skip"
@@ -331,9 +332,12 @@
       p.set('spending_pattern', g('spending_pattern') || 'constant');
       ['smile_slow_pct','smile_no_pct','monthly_contribution','regime_override',
        'years','current_age','retirement_age','ssa_claiming_age','ssa_monthly','fra_age',
-       'spouse_monthly','spouse_claiming_age','spouse_current_age','spouse_fra_age'].forEach(n => {
+       'spouse_monthly','spouse_claiming_age','spouse_current_age','spouse_fra_age',
+       'deferred_tax_rate','taxable_tax_rate','bucket_taxable','bucket_traditional','bucket_roth'].forEach(n => {
         if (g(n)) p.set(n, g(n));
       });
+      const ib = f.elements['income_bridge'];
+      if (ib && ib.checked) p.set('income_bridge', 'true');
       out.innerHTML = 'Calculating…';
       try {
         const d = await (await fetch('/analysis/api/max-spending?' + p.toString())).json();
@@ -343,8 +347,10 @@
           '<div class="text-gray-700">For <b>' + d.target_survival + '% survival</b>, the highest sustainable spending is:</div>' +
           '<div class="mt-1 text-2xl font-bold text-indigo-700"><span class="bal">' + fmt(d.annual_amount) + '</span>/yr ' +
           '<span class="text-base font-medium text-gray-500">(<span class="bal">' + fmt(d.monthly_amount) + '</span>/mo)</span></div>' +
-          '<div class="text-xs text-gray-500 mt-1">≈ ' + d.max_withdrawal_rate + '% withdrawal rate · achieved survival ' + d.achieved_survival + '%' +
-          (Number(d.ssa_annual_benefit) ? ' · plus Social Security up to ' + fmt(d.ssa_annual_benefit) + '/yr once every check has started' : '') + '</div>' +
+          '<div class="text-xs text-gray-500 mt-1">≈ ' + d.max_withdrawal_rate + '% of the median retirement balance · achieved survival ' + d.achieved_survival + '%' +
+          (Number(d.ssa_annual_benefit) ? ' · Social Security covers up to ' + fmt(d.ssa_annual_benefit) + '/yr of this once every check has started' : '') +
+          (d.income_bridge ? ' · after taxes, drawn taxable → tax-deferred → Roth' : '') + '</div>' +
+          (d.target_reachable ? '' : '<div class="text-xs text-red-600 mt-1">The target survival can\'t be reached even with almost no spending from the portfolio.</div>') +
           '</div>';
       } catch (e) {
         out.innerHTML = '<span class="text-red-600">Could not calculate — please try again.</span>';
@@ -465,13 +471,13 @@
         <div class="grid grid-cols-2 gap-3 text-sm mb-3">
           <div class="bg-orange-50 rounded-lg p-3">
             <div class="text-xs text-gray-500 mb-0.5">
-              {% if r.spending_pattern == 'smile' %}Go-Go annual rate (median){% else %}Annual withdrawal (median){% endif %}
+              {% if r.spending_pattern == 'smile' %}Go-Go annual spending{% else %}Annual spending{% endif %}
             </div>
             <div class="font-bold text-orange-700"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_annual_amount) }}</span>/yr</div>
             <div class="text-xs text-gray-400"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_annual_amount / 12) }}</span>/mo</div>
           </div>
           <div class="bg-orange-50 rounded-lg p-3">
-            <div class="text-xs text-gray-500 mb-0.5">Total withdrawn (median)</div>
+            <div class="text-xs text-gray-500 mb-0.5">Drawn from portfolio (median)</div>
             <div class="font-bold text-orange-700"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_total) }}</span></div>
             <div class="text-xs text-gray-400">over {{ r.withdrawal_years }} years{% if r.spending_pattern == 'smile' %} (smile-adjusted){% endif %}</div>
           </div>
@@ -875,7 +881,7 @@ const ssaLinePlugin = {
     id: 'ssaLine',
     afterDraw(chart) {
         if (!withdrawalYears) return;
-        if (currentData.ssa_claiming_age == null || currentData.bridge_years == null) return;
+        if (currentData.bridge_years == null) return;
         // Distribution is plotted starting at index accumYears-1 (retirement anchor),
         // so SSA begins bridge_years later along the x-axis.
         const idx = accumYears - 1 + currentData.bridge_years;
@@ -893,7 +899,9 @@ const ssaLinePlugin = {
         chart.ctx.fillStyle = 'rgba(2,132,199,0.95)';
         chart.ctx.font = '11px sans-serif';
         chart.ctx.textAlign = 'center';
-        chart.ctx.fillText(`SS @ ${currentData.ssa_claiming_age}`, x, yScale.top + 26);
+        const ssAge = currentData.retirement_age != null
+            ? currentData.retirement_age + currentData.bridge_years : currentData.ssa_claiming_age;
+        chart.ctx.fillText(`SS @ ${ssAge}`, x, yScale.top + 26);
         chart.ctx.restore();
     }
 };

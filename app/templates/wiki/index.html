@@ -1123,7 +1123,7 @@ response = client.messages.create(
   <p><code>get_period_returns()</code> powers the dashboard <strong>Performance</strong> panel — the <strong>3-month / 6-month / 12-month / YTD</strong> total return of the current holdings, each as both a <strong>percentage and a dollar gain</strong>. Unlike the annualised TWR above, these are <em>cumulative</em> returns: each holding is valued buy-and-hold at its window-ago price vs. today's at current quantity (start<sub>i</sub> = mv<sub>i</sub> / (1 + cum<sub>i</sub>); gain = AUM − Σ start<sub>i</sub>). Cash, private, and positions without enough history for a window are held flat; a window with no qualifying history shows "—". History comes from the DB when dense enough, otherwise a single bulk yfinance download, and the result is cached ~60 min so the landing page stays responsive.</p>
 
   <h3>Monte Carlo Simulation — Two-Phase</h3>
-  <p>Log-normal Geometric Brownian Motion (GBM) with annual steps, using Ito's lemma correction: <code>drift = μ − 0.5σ²</code>. Portfolio μ and σ are weighted-average asset-class parameters (uncorrelated assumption). The simulation runs two phases sequentially: <strong>Accumulation</strong> then optionally <strong>Distribution</strong>.</p>
+  <p>Log-normal Geometric Brownian Motion (GBM) with annual steps, with <code>drift = ln(1 + μ) − 0.5σ²</code>, so the mean annual growth factor is exactly 1 + μ (μ is the asset class's simple expected return). Portfolio μ is the weighted average; portfolio σ uses a fixed table of long-run asset-class correlations (<code>σ<sub>p</sub>² = wᵀΣw</code>; e.g. US/international stocks 0.85, stocks/bonds 0.10). The simulation runs two phases sequentially: <strong>Accumulation</strong> then optionally <strong>Distribution</strong>.</p>
 
   <h4>Accumulation Phase</h4>
   <p>Standard GBM with optional monthly deposit model using a mid-year approximation (deposits assumed to arrive uniformly throughout the year, earning on average √gf in growth):</p>
@@ -1150,7 +1150,7 @@ cumulative = cumprod(growth_factors, axis=1) * initial_value</code></pre>
   </table></div>
 
   <h4>Distribution / Withdrawal Phase</h4>
-  <p>Activated when <code>withdrawal_rate &gt; 0</code> and <code>withdrawal_years &gt; 0</code>. The dollar withdrawal is computed once per simulation from its own ending accumulation value — making it constant across all distribution years within that path (classic "4% rule" framing). No regime conditioning applies in this phase.</p>
+  <p>Activated when <code>withdrawal_rate &gt; 0</code> and <code>withdrawal_years &gt; 0</code>. One dollar spending amount is used for every simulation: the withdrawal rate × the <em>median</em> ending accumulation value (classic "4% rule" framing). Testing the same dollars in every path means a poor market before or after retirement lowers survival. Regime conditioning covers the first 2 years of the whole simulation, so with fewer than 2 accumulation years it carries into retirement.</p>
   <pre><code># Per-simulation constant annual withdrawal (4% rule)
 annual_wdraw = final_vals * (withdrawal_rate / 100.0)
 
@@ -1181,7 +1181,7 @@ for bucket in (taxable, traditional, roth):  # in order
   <p>Surfaced via the <code>IncomeBridge</code> schema and a violet "Income Bridge — drawdown order" panel: the annual <strong>Gap</strong> (spend the portfolio covers pre-SSA), the <strong>Bridge number</strong> (gross capital for the pre-SSA window), per-bucket start balances + depletion age, lifetime taxes, and bridge coverage %. API params: <code>income_bridge</code>, <code>deferred_tax_rate</code> / <code>taxable_tax_rate</code> (percent), and optional <code>bucket_taxable</code> / <code>bucket_traditional</code> / <code>bucket_roth</code> overrides (when supplied they drive the portfolio scale, useful before the real accounts are loaded).</p>
 
   <h4>Max Sustainable Spending</h4>
-  <p>A follow-on solver (<code>solve_max_spending()</code>) binary-searches the withdrawal rate to find the highest spending that holds the portfolio's survival at a target rate (default 85%), reusing the current scenario's ages, Social Security, contributions and spending pattern. Exposed at <code>GET /analysis/api/max-spending</code> and rendered in-page below the Monte Carlo chart.</p>
+  <p>A follow-on solver (<code>solve_max_spending()</code>) binary-searches the withdrawal rate to find the highest spending that holds the portfolio's survival at a target rate (default 85%), reusing exactly the displayed scenario (<code>_mc_scenario()</code>): ages, household Social Security, contributions, spending pattern, and — when enabled — the income bridge's buckets and tax rates. It reports <code>target_reachable=false</code> when even ~0% spending misses the target. Exposed at <code>GET /analysis/api/max-spending</code> and rendered in-page below the Monte Carlo chart.</p>
 
   <div class="callout callout-warn">
     <span class="callout-icon">⚠️</span>
@@ -1201,7 +1201,7 @@ for bucket in (taxable, traditional, roth):  # in order
       <tr><td class="mono">regime_context</td><td>"Bull" | "Sideways" | "Bear" | "Base"</td></tr>
       <tr><td class="mono">monthly_contribution</td><td>Monthly deposit amount used in simulation</td></tr>
       <tr><td class="mono">withdrawal_annual_amount</td><td>Median annual withdrawal (= median final_val × rate)</td></tr>
-      <tr><td class="mono">withdrawal_total</td><td>Median total withdrawn over distribution years</td></tr>
+      <tr><td class="mono">withdrawal_total</td><td>Median total actually drawn from the portfolio (net of Social Security, stopping at depletion)</td></tr>
       <tr><td class="mono">withdrawal_final_median / p10 / p90</td><td>Portfolio values at end of distribution phase</td></tr>
       <tr><td class="mono">portfolio_survival_rate</td><td>% of simulations with portfolio &gt; 0 at end</td></tr>
     </tbody>
