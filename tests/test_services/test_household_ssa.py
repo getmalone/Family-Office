@@ -132,3 +132,43 @@ def test_run_monte_carlo_couple_and_bridge():
     # Earlier-claiming spouse shortens the bridge vs. the primary alone (claim 67
     # with retirement at 60 would be a 7-year bridge).
     assert r.bridge_years < 7
+
+
+def test_spousal_topup_reduces_only_the_excess():
+    svc = _svc_no_db()
+    # PIAs 4,100 / 1,900, both claim at 62 (FRA 67). Spouse's own = 70% × 1,900
+    # = 1,330; spousal excess = (2,050 − 1,900) × 65% = 97.50 → 1,427.50 total.
+    _, hh = svc._household_ssa(
+        withdrawal_years=30, accumulation_years=4, retirement_age=58,
+        primary_monthly_fra=4100, primary_claiming_age=62,
+        spouse_monthly_fra=1900, spouse_claiming_age=62, spouse_current_age=54,
+    )
+    spouse = next(p for p in hh.people if p.label == "Spouse")
+    assert spouse.own_monthly_benefit == Decimal("1330.00")
+    assert spouse.spousal_monthly_benefit == Decimal("97.50")
+    assert spouse.monthly_benefit == Decimal("1427.50")
+    assert hh.combined_annual_benefit == Decimal("51570.00")    # (2,870 + 1,427.50) × 12
+
+
+def test_spousal_reduction_uses_age_when_topup_starts():
+    svc = _svc_no_db()
+    # Spouse files at 62 but the higher earner waits to 70 (spouse is then 70):
+    # the top-up starts after the spouse's FRA, so the excess is unreduced.
+    _, hh = svc._household_ssa(
+        withdrawal_years=20, accumulation_years=0, retirement_age=62,
+        primary_monthly_fra=4100, primary_claiming_age=70,
+        spouse_monthly_fra=1900, spouse_claiming_age=62, spouse_current_age=62,
+    )
+    spouse = next(p for p in hh.people if p.label == "Spouse")
+    assert spouse.spousal_monthly_benefit == Decimal("150.00")
+
+
+def test_max_spending_uses_household_ssa():
+    svc = AnalysisService(_session())
+    kw = dict(num_simulations=300, withdrawal_years=30, current_age=54, retirement_age=58,
+              ssa_claiming_age=62, ssa_monthly_fra=Decimal("4100"), target_survival=85.0)
+    single = svc.solve_max_spending(**kw)
+    couple = svc.solve_max_spending(**kw, spouse_monthly_fra=Decimal("1900"),
+                                    spouse_claiming_age=62, spouse_current_age=54)
+    assert single.ssa_annual_benefit == Decimal("34440.00")
+    assert couple.ssa_annual_benefit == Decimal("51570.00")
