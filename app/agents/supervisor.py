@@ -170,9 +170,12 @@ def _get_default_llm():
         try:
             from langchain_anthropic import ChatAnthropic
 
+            from app.services.app_settings import anthropic_default_headers
+
             return ChatAnthropic(
                 model=settings.llm_model,
                 api_key=settings.anthropic_api_key,
+                default_headers=anthropic_default_headers() or None,
             )
         except Exception:
             pass

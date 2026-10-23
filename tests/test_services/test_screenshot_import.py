@@ -117,3 +117,61 @@ def test_damaged_sdk_install_gives_a_plain_message(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", broken)
     with pytest.raises(si.ScreenshotImportError, match="relaunch"):
         si.extract_positions([(PNG, "image/png")])
+
+
+def test_saved_key_beats_env_file_and_placeholders_ignored(session, monkeypatch):
+    from app.config import settings
+    from app.services import app_settings
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-...")      # example-file placeholder
+    monkeypatch.delenv("KFO_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert si._api_key() == ""                                           # placeholder isn't a key
+    app_settings.set_setting(session, "anthropic_api_key", "sk-ant-real-key-1234")
+    app_settings.load_into_settings(session)                             # startup
+    assert si._api_key() == "sk-ant-real-key-1234"
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-old-env-file-key")
+    app_settings.load_into_settings(session)                             # stale .env key loses too
+    assert si._api_key() == "sk-ant-real-key-1234"
+
+
+def test_rejected_key_message_names_the_key(monkeypatch):
+    import anthropic
+    import httpx
+
+    class Rejecting(FakeClient):
+        def create(self, **kw):
+            req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            raise anthropic.AuthenticationError("invalid x-api-key", response=httpx.Response(401, request=req),
+                                                body=None)
+
+    monkeypatch.setattr(si, "_api_key_and_source", lambda: ("sk-ant-abcdefgh9876", "Settings / .env"))
+    with pytest.raises(si.ScreenshotImportError, match="…9876"):
+        si.extract_positions([(PNG, "image/png")], client=Rejecting())
+
+
+def test_workspace_id_sent_as_header(monkeypatch, test_client):
+    from app.config import settings
+    from app.services import app_settings
+    monkeypatch.setattr(settings, "anthropic_workspace_id", "")
+    r = test_client.post("/settings/", data={"anthropic_workspace_id": " wrkspc_abc "}, follow_redirects=False)
+    assert r.status_code == 303
+    assert app_settings.anthropic_default_headers() == {"anthropic-workspace-id": "wrkspc_abc"}
+    test_client.post("/settings/", data={"anthropic_workspace_id": ""}, follow_redirects=False)
+    assert app_settings.anthropic_default_headers() == {}                # cleared
+
+
+def test_unscoped_key_message(monkeypatch):
+    import anthropic
+    import httpx
+
+    class Unscoped(FakeClient):
+        def create(self, **kw):
+            req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            msg = ("This API key is not scoped to a workspace, so this request must include the "
+                   "anthropic-workspace-id header")
+            raise anthropic.BadRequestError(msg, response=httpx.Response(400, request=req), body=None)
+
+    with pytest.raises(si.ScreenshotImportError, match="Workspace ID"):
+        si.extract_positions([(PNG, "image/png")], client=Unscoped())
