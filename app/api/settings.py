@@ -4,6 +4,7 @@ import accounts/positions from CSV — all without touching files on disk.
 """
 
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -188,3 +189,119 @@ async def import_csv(
     if result["errors"]:
         summary += f" {len(result['errors'])} row(s) skipped."
     return RedirectResponse(url=f"/settings/?msg={summary.replace(' ', '+')}", status_code=303)
+
+
+# ── Screenshot import (Claude reads account screenshots → review → import) ────
+
+@router.post("/import-screenshots")
+def import_screenshots(
+    request: Request,
+    db: Session = Depends(get_db),
+    files: list[UploadFile] = File(...),
+):
+    """Read one account's screenshots with Claude and show an editable review.
+    Nothing is saved here, and the images are never written anywhere."""
+    from app.models.account import Account
+    from app.services import screenshot_import as si
+
+    images = []
+    for f in files:
+        data = f.file.read()
+        if data:
+            images.append((data, (f.content_type or "").lower()))
+    try:
+        # Network call first, with no database transaction open.
+        result = si.extract_positions(images)
+    except si.ScreenshotImportError as exc:
+        return RedirectResponse(url=f"/settings/?err={quote_plus(str(exc))}#screenshots",
+                                status_code=303)
+    finally:
+        del images
+
+    accounts = db.query(Account).filter(Account.is_active == True).order_by(Account.name).all()
+    acct = result["account"]
+    # Suggest an existing account whose name carries the same last 4 digits.
+    match = None
+    if acct["account_last4"]:
+        match = next((a for a in accounts if acct["account_last4"] in (a.name or "")), None)
+    return templates.TemplateResponse(
+        "settings/screenshot_review.html",
+        {
+            "request": request,
+            "page_title": "Review screenshot import",
+            "account": acct,
+            "rows": result["rows"],
+            "notes": result["notes"],
+            "accounts": accounts,
+            "matched_account": match.name if match else None,
+            "default_name": si.default_account_name(acct),
+            "account_types": si.ACCOUNT_TYPES,
+            "asset_classes": si.ASSET_CLASSES,
+        },
+    )
+
+
+@router.post("/import-screenshots/confirm")
+def confirm_screenshot_import(
+    db: Session = Depends(get_db),
+    target: str = Form("new"),
+    existing_account: str = Form(""),
+    account_name: str = Form(""),
+    account_type: str = Form("brokerage"),
+    institution: str = Form(""),
+    include: list[str] = Form([]),
+    symbol: list[str] = Form([]),
+    name: list[str] = Form([]),
+    asset_class: list[str] = Form([]),
+    quantity: list[str] = Form([]),
+    price: list[str] = Form([]),
+    cost_basis_total: list[str] = Form([]),
+):
+    """Import the reviewed rows into one account (replacing that account's
+    previously imported positions, as with file imports)."""
+    from app.models.account import Account
+    from app.services import screenshot_import as si
+    from app.services.import_service import import_rows
+
+    if target == "existing":
+        acct = db.query(Account).filter(Account.name == existing_account).first()
+        if acct is None:
+            return RedirectResponse(url="/settings/?err=Choose+an+account#screenshots", status_code=303)
+        acct_name = acct.name
+        acct_type = getattr(acct.account_type, "value", acct.account_type)
+        inst = acct.institution
+    else:
+        acct_name = account_name.strip() or "Imported account"
+        acct_type = account_type if account_type in si.ACCOUNT_TYPES else "brokerage"
+        inst = institution.strip() or None
+
+    keep = {int(i) for i in include if i.isdigit()}
+    reviewed = [
+        {"symbol": symbol[i].strip().upper() or None, "name": name[i].strip(),
+         "asset_class": asset_class[i], "quantity": quantity[i], "price": price[i],
+         "cost_basis_total": cost_basis_total[i]}
+        for i in range(len(symbol)) if i in keep
+    ]
+    rows = si.to_import_rows(acct_name, acct_type, inst, reviewed)
+    if not rows:
+        return RedirectResponse(url="/settings/?err=No+positions+selected+to+import#screenshots",
+                                status_code=303)
+    try:
+        result = import_rows(db, rows)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return RedirectResponse(url=f"/settings/?err={quote_plus(f'Import failed: {exc}')}#screenshots",
+                                status_code=303)
+
+    try:
+        from app.services.backfill_worker import ensure_history
+        ensure_history(force=True)
+    except Exception:
+        pass
+    summary = f"Imported {result['positions']} positions into {acct_name}."
+    if result.get("replaced"):
+        summary += f" Replaced {result['replaced']} previously imported position(s)."
+    if result["errors"]:
+        summary += f" {len(result['errors'])} row(s) skipped."
+    return RedirectResponse(url=f"/settings/?msg={quote_plus(summary)}", status_code=303)

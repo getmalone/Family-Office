@@ -240,7 +240,7 @@ The `.env` file path is resolved **absolutely** using `Path(__file__).parent.par
 | `llm_model` | `KFO_LLM_MODEL` | `claude-sonnet-4-5` | Override to any Anthropic model ID |
 | `market_data_cache_ttl_minutes` | `KFO_MARKET_DATA_CACHE_TTL_MINUTES` | `15` | Price cache age before re-fetch |
 | `trade_approval_threshold` | `KFO_TRADE_APPROVAL_THRESHOLD` | `50000` | Dollar amount above which trades need approval |
-| `gift_approval_threshold` | `KFO_GIFT_APPROVAL_THRESHOLD` | `18000` | Annual exclusion trigger (2026 IRS limit) |
+| `gift_approval_threshold` | `KFO_GIFT_APPROVAL_THRESHOLD` | `19000` | Annual exclusion trigger (2026 IRS limit) |
 | `host` | `KFO_HOST` | `127.0.0.1` | Always bind to loopback |
 | `port` | `KFO_PORT` | `8000` | Override if port 8000 is in use |
 | `field_encryption_key` | `KFO_FIELD_ENCRYPTION_KEY` | `""` | AES key for SSN/account number columns |
@@ -397,7 +397,7 @@ All business logic lives in `app/services/`. Services are plain Python classes w
 
 ### EstateService
 
-- **record_gift()** — Allocates gift between annual exclusion (per donor→recipient pair per year, up to $18,000) and lifetime exemption (~$13.61M). Charitable gifts (`is_charitable=True`) skip both allocations entirely — no annual exclusion or lifetime exemption consumed, no Form 709 required. Annual exclusion tracking filters explicitly to the matching recipient (including NULL→NULL for entity/external gifts) to prevent cross-recipient aggregation errors. Form 709 auto-set when non-charitable excess exists.
+- **record_gift()** — Allocates gift between annual exclusion (per donor→recipient pair per year, up to the year's limit: $18,000 in 2024, $19,000 in 2025–26) and lifetime exemption (the year's basic exclusion: $13.99M in 2025, $15M in 2026). Charitable gifts (`is_charitable=True`) skip both allocations entirely — no annual exclusion or lifetime exemption consumed, no Form 709 required. Annual exclusion is tracked per recipient — family member, entity, or outside person matched by name (case-insensitive) — so each outside recipient gets their own exclusion. Form 709 auto-set when non-charitable excess exists.
 - **simulate_grat(params)** — Runs GRAT annuity math for each growth rate scenario. Compounds balance annually, subtracts annuity payment, calculates remainder. Tax savings estimated at 40% estate tax rate. Persists each scenario as a `GRATSimulation` row.
 - **get_ownership_tree()** — Returns nested `OwnershipNode` tree for all active family members with linked accounts and percentages.
 
@@ -896,8 +896,8 @@ Queries all `TaxLotDisposal` records for the tax year, producing rows with: symb
 
 ### Gift Tracking
 
-- **Annual exclusion (2026):** $18,000 per donor-recipient pair. First $18k of any gift applies here.
-- **Lifetime exemption:** ~$13.61M per donor. Amounts above the annual exclusion consume lifetime exemption.
+- **Annual exclusion (2026):** $19,000 per donor-recipient pair. The first $19k of any gift applies here (amounts by year in <code>ANNUAL_EXCLUSION_BY_YEAR</code>).
+- **Lifetime exemption:** $15M per donor in 2026 (P.L. 119-21; $13.99M in 2025). Amounts above the annual exclusion consume lifetime exemption.
 - **Form 709:** Auto-flagged (`form_709_filed=True`) when any gift exceeds the annual exclusion.
 - **In-kind gifts:** Assets can be gifted with a linked `asset_id` and `donor_cost_basis`.
 - **Charitable gifts:** Tracked separately with `is_charitable=True`.

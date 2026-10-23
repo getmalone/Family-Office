@@ -34,13 +34,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     llm_provider: str = "anthropic"
     llm_model: str = "claude-sonnet-4-20250514"
+    screenshot_model: str = "claude-opus-5-5"   # reads account screenshots (Settings → import)
 
     # Market Data
     market_data_cache_ttl_minutes: int = 15
 
     # Approval Policies
     trade_approval_threshold: Decimal = Decimal("50000")
-    gift_approval_threshold: Decimal = Decimal("18000")
+    gift_approval_threshold: Decimal = Decimal("19000")  # 2026 annual gift exclusion
 
     # Server
     host: str = "127.0.0.1"
