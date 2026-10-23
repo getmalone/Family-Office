@@ -65,7 +65,7 @@
             <div class="text-xs text-gray-400">Expected loss in worst 1% of days</div>
         </div>
     </div>
-    <p class="text-xs text-gray-400 -mt-4">VaR/CVaR computed via historical simulation over {{ risk.lookback_days }}-day lookback. Positive = dollar loss.</p>
+    <p class="text-xs text-gray-400 -mt-4">VaR/CVaR computed via historical simulation over a {{ risk.lookback_days }}-trading-day lookback. Positive = dollar loss.{% if risk.history_coverage_pct is not none and risk.history_coverage_pct < 100 %} Positions with price history make up {{ risk.history_coverage_pct }}% of the portfolio; the rest use asset-class assumptions (volatility, beta and correlation), and drawdown/VaR are scaled to the whole portfolio's volatility.{% endif %}</p>
     {% endif %}
 
     <!-- Tabs: Position / Asset Class / Correlation / Returns -->
@@ -76,7 +76,7 @@
                 <button onclick="switchTab('assetclass')" id="tab-btn-assetclass" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Asset Class</button>
                 <button onclick="switchTab('concentration')" id="tab-btn-concentration" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Concentration (HHI)</button>
                 <button onclick="switchTab('correlation')" id="tab-btn-correlation" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Correlation Heatmap</button>
-                <button onclick="switchTab('returns')" id="tab-btn-returns" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Return Metrics (TWR)</button>
+                <button onclick="switchTab('returns')" id="tab-btn-returns" class="py-2 border-b-2 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700">Trailing Returns</button>
             </nav>
         </div>
 
@@ -277,24 +277,24 @@
             <div id="returns-container" class="hidden">
                 <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
                     <div class="bg-white shadow rounded-lg p-5">
-                        <div class="text-sm text-gray-500">1-Year TWR</div>
+                        <div class="text-sm text-gray-500">1-Year Return</div>
                         <div id="twr-1yr" class="text-3xl font-semibold">—</div>
                     </div>
                     <div class="bg-white shadow rounded-lg p-5">
-                        <div class="text-sm text-gray-500">3-Year TWR (Ann.)</div>
+                        <div class="text-sm text-gray-500">3-Year Return (Ann.)</div>
                         <div id="twr-3yr" class="text-3xl font-semibold">—</div>
                     </div>
                     <div class="bg-white shadow rounded-lg p-5">
-                        <div class="text-sm text-gray-500">5-Year TWR (Ann.)</div>
+                        <div class="text-sm text-gray-500">5-Year Return (Ann.)</div>
                         <div id="twr-5yr" class="text-3xl font-semibold">—</div>
                     </div>
                     <div class="bg-white shadow rounded-lg p-5">
-                        <div class="text-sm text-gray-500">Since Inception (Ann.)</div>
+                        <div class="text-sm text-gray-500" id="twr-since-label">Since Earliest History</div>
                         <div id="twr-inception" class="text-3xl font-semibold">—</div>
                         <div id="twr-since" class="text-xs text-gray-400"></div>
                     </div>
                 </div>
-                <p class="text-xs text-gray-400 mt-2">TWR = Time-Weighted Return (chain-linked sub-period returns, annualised). Computed from available daily price history.</p>
+                <p class="text-xs text-gray-400 mt-2">Backtest of your <strong>current</strong> holdings held unchanged over each window (cash at 0%). Not a time-weighted return of your actual account history: past values and deposits aren't recorded. Annualised only for windows of a year or more.<span id="twr-coverage"></span></p>
             </div>
         </div>
     </div>
@@ -424,6 +424,13 @@ function loadReturns() {
             document.getElementById('twr-inception').innerHTML = fmt(data.twr_inception);
             if (data.annualized_since) {
                 document.getElementById('twr-since').textContent = `Since ${data.annualized_since}`;
+                const yrs = (Date.now() - new Date(data.annualized_since)) / (365.25 * 864e5);
+                document.getElementById('twr-since-label').textContent =
+                    yrs >= 1 ? 'Since Earliest History (Ann.)' : 'Since Earliest History (cumulative)';
+            }
+            if (data.history_coverage_pct != null && parseFloat(data.history_coverage_pct) < 100) {
+                document.getElementById('twr-coverage').textContent =
+                    ` The 1-year figure covers ${parseFloat(data.history_coverage_pct).toFixed(1)}% of the portfolio; positions without a year of prices are left out.`;
             }
         })
         .catch(() => {

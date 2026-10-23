@@ -1076,16 +1076,17 @@ response = client.messages.create(
   </div>
 
   <h3>Risk Metrics (AnalysisService)</h3>
+  <p>The lookback is in trading days (252 ≈ 1 year). Positions are per security (a fund held in several accounts is one position). Prices are inner-joined <strong>by date</strong> before returns are taken, and weekend snapshot rows of non-crypto assets are dropped. Holdings with price history use their sample statistics; holdings without it use the asset-class assumptions (volatility, expected return, and the asset-class correlation table) — no random fill-in, so the numbers are stable between page loads. <code>history_coverage_pct</code> reports the weight with price history.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Metric</th><th>Calculation</th><th>Notes</th></tr></thead>
     <tbody>
-      <tr><td><strong>Portfolio Volatility</strong></td><td><code>portfolio_std × √252</code></td><td>Annualized, 252-day basis</td></tr>
+      <tr><td><strong>Portfolio Volatility</strong></td><td><code>√(wᵀΣw)</code>, Σ = annual covariance</td><td>Sample covariance among holdings with history; ρ(class)·σᵢ·σⱼ otherwise</td></tr>
       <tr><td><strong>Sharpe Ratio</strong></td><td><code>(annualized_return − risk_free) / volatility</code></td><td>Default risk-free = 5%</td></tr>
-      <tr><td><strong>Max Drawdown</strong></td><td><code>min((V_t − peak_t) / peak_t)</code></td><td>Returns peak date, trough date</td></tr>
-      <tr><td><strong>Portfolio Beta</strong></td><td><code>cov(portfolio, SPY) / var(SPY)</code></td><td>SPY fetched over same lookback window</td></tr>
+      <tr><td><strong>Max Drawdown</strong></td><td><code>min(V_t / peak_t − 1)</code>, V₀ = 1</td><td>Includes the starting value; dated series of covered holdings, rescaled to the portfolio's volatility</td></tr>
+      <tr><td><strong>Portfolio Beta</strong></td><td><code>Σ wᵢ βᵢ</code></td><td>βᵢ = cov(rᵢ, SPY)/var(SPY) with history; else ρ(class, US equity)·σᵢ/σ_SPY</td></tr>
       <tr><td><strong>HHI Concentration</strong></td><td><code>Σ(w_i%)²</code></td><td>DOJ convention — weights as percentages; 100% single-holding = 10,000</td></tr>
       <tr><td><strong>Per-position Beta</strong></td><td><code>cov(pos_returns, SPY) / var(SPY)</code></td><td></td></tr>
-      <tr><td><strong>Risk Contribution %</strong></td><td><code>w_i × Cov(r_i, r_p)_annual / Var(r_p)_annual × 100</code></td><td>Exact Euler decomposition — contributions sum to 100%</td></tr>
+      <tr><td><strong>Risk Contribution %</strong></td><td><code>wᵢ (Σw)ᵢ / wᵀΣw × 100</code></td><td>Exact Euler decomposition — contributions sum to 100%</td></tr>
       <tr><td><strong>1-Day VaR (95%)</strong></td><td><code>|5th-percentile daily return| × portfolio_AUM</code></td><td>Historical simulation, no normality assumption</td></tr>
       <tr><td><strong>CVaR / ES (95%)</strong></td><td><code>|mean(returns below VaR)| × portfolio_AUM</code></td><td>Expected Shortfall — captures tail severity beyond VaR</td></tr>
       <tr><td><strong>VaR / CVaR (99%)</strong></td><td>Same as above at 1st percentile</td><td>Worst-1% of days expected loss</td></tr>
@@ -1094,7 +1095,7 @@ response = client.messages.create(
 
   <div class="callout callout-info">
     <span class="callout-icon">⚡</span>
-    <div class="callout-body"><p><strong>Performance optimization:</strong> <code>_bulk_daily_returns()</code> issues a single <code>yf.download()</code> call for all symbols simultaneously — orders of magnitude faster than per-ticker calls. It first checks DB cache for stored <code>asset_prices</code> (with a ±99% sanity check to reject corrupted history), then fetches only the symbols with cache misses.</p></div>
+    <div class="callout-body"><p><strong>Performance optimization:</strong> <code>_bulk_price_series()</code> (behind <code>_bulk_daily_returns()</code> and <code>_aligned_returns()</code>) issues a single <code>yf.download()</code> call for all symbols simultaneously, in refresh contexts only — orders of magnitude faster than per-ticker calls. It first checks DB cache for stored <code>asset_prices</code> (with a ±99% sanity check to reject corrupted history), then fetches only the symbols with cache misses.</p></div>
   </div>
 
   <h3>Asset Class Assumptions (for private/illiquid assets)</h3>
@@ -1114,10 +1115,10 @@ response = client.messages.create(
   </table></div>
 
   <h3>Correlation Matrix</h3>
-  <p>Pairwise Pearson correlation of daily log-returns for all holdings with price history, via <code>get_correlation_matrix(lookback_days=252)</code>. Returns an N×N <code>CorrelationMatrix</code> schema. Rendered on the Risk page's Correlation Heatmap tab using an HTML Canvas drawing — blue = positive correlation, red = negative, white = zero. Available as JSON at <code>GET /analysis/api/correlation?lookback_days=N</code>.</p>
+  <p>Pairwise Pearson correlation of simple daily returns, aligned by date, for all holdings with price history, via <code>get_correlation_matrix(lookback_days=252)</code>. Returns an N×N <code>CorrelationMatrix</code> schema. Rendered on the Risk page's Correlation Heatmap tab using an HTML Canvas drawing — blue = positive correlation, red = negative, white = zero. Available as JSON at <code>GET /analysis/api/correlation?lookback_days=N</code>.</p>
 
   <h3>Time-Weighted Return (TWR)</h3>
-  <p><code>get_return_metrics()</code> chain-links daily sub-period returns (product of 1 + r_t) over 1-year, 3-year, 5-year, and since-inception windows, then annualises via <code>(cumulative + 1)^(1/years) − 1</code>. Requires holdings price history in the DB; private/illiquid positions are excluded. Results exposed at <code>GET /analysis/api/returns</code> and displayed in the "Return Metrics (TWR)" tab of the Risk page.</p>
+  <p><code>get_return_metrics()</code> is a <strong>backtest of the current holdings</strong>, not a true time-weighted return (the app keeps no record of past portfolio values or external cash flows). Each 1/3/5-year window values today's positions buy-and-hold from the window start; cash counts at 0%; a position without prices back to the window start is left out of that window and the rest re-weighted (<code>history_coverage_pct</code> for the 1-year window). "Since earliest history" starts when positions making up ≥90% of the priced portfolio have data. Windows shorter than a year are cumulative, not annualised. Exposed at <code>GET /analysis/api/returns</code>; shown in the "Trailing Returns" tab of the Risk page.</p>
 
   <h3>Trailing-Window Performance (Dashboard)</h3>
   <p><code>get_period_returns()</code> powers the dashboard <strong>Performance</strong> panel — the <strong>3-month / 6-month / 12-month / YTD</strong> total return of the current holdings, each as both a <strong>percentage and a dollar gain</strong>. Unlike the annualised TWR above, these are <em>cumulative</em> returns: each holding is valued buy-and-hold at its window-ago price vs. today's at current quantity (start<sub>i</sub> = mv<sub>i</sub> / (1 + cum<sub>i</sub>); gain = AUM − Σ start<sub>i</sub>). Cash, private, and positions without enough history for a window are held flat; a window with no qualifying history shows "—". History comes from the DB when dense enough, otherwise a single bulk yfinance download, and the result is cached ~60 min so the landing page stays responsive.</p>

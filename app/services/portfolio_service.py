@@ -584,8 +584,14 @@ class PortfolioService:
 
     def get_portfolio_history(self, days: int = 90) -> dict:
         """
-        Historical portfolio value for trend charts.
-        Returns total-portfolio and per-account value for each date we have prices.
+        Historical value of TODAY's holdings for trend charts (total and per
+        account) on each date with prices.
+
+        Cash / stable value is valued at book (as in get_summary). An asset first
+        priced partway through the window is held at that first price for the
+        earlier dates rather than counted as $0, and an asset with no price in
+        the window uses its last stored price before it (else its cost basis),
+        so the line doesn't jump when a price series starts.
         """
         from datetime import timedelta
 
@@ -617,12 +623,31 @@ class PortfolioService:
         for p in prices_raw:
             by_date.setdefault(p.price_date, {})[p.asset_id] = p.close_price
 
-        # Fill forward: for any asset without a price on a given date use last known
+        # Starting price per asset: cash at book (as get_summary), else the first price in
+        # the window (back-filled), else the last stored price before the
+        # window, else cost basis. Then fill forward day by day.
         all_dates = sorted(by_date.keys())
+        first_in_window: dict[int, Decimal] = {}
+        for p in prices_raw:
+            first_in_window.setdefault(p.asset_id, p.close_price)
         last_known: dict[int, Decimal] = {}
+        cash_ids: set[int] = set()
+        for aid in asset_ids:
+            asset = self.session.get(Asset, aid)
+            if asset is not None and is_cash_asset(asset):
+                cash_ids.add(aid)
+                last_known[aid] = Decimal("1")
+            elif aid in first_in_window:
+                last_known[aid] = first_in_window[aid]
+            else:
+                before = (self.session.query(AssetPrice.close_price)
+                          .filter(AssetPrice.asset_id == aid, AssetPrice.price_date < cutoff)
+                          .order_by(AssetPrice.price_date.desc()).first())
+                lot = next(l for l in lots if l.asset_id == aid)
+                last_known[aid] = before[0] if before else lot.cost_basis_per_unit
         filled: dict[date, dict[int, Decimal]] = {}
         for d in all_dates:
-            last_known.update(by_date[d])
+            last_known.update({aid: px for aid, px in by_date[d].items() if aid not in cash_ids})
             filled[d] = dict(last_known)
 
         # Account name lookup
@@ -642,7 +667,8 @@ class PortfolioService:
             acct_totals: dict[int, Decimal] = {}
 
             for lot in lots:
-                price = day_prices.get(lot.asset_id, Decimal("0"))
+                price = (lot.cost_basis_per_unit if lot.asset_id in cash_ids
+                         else day_prices.get(lot.asset_id, Decimal("0")))
                 val = lot.remaining_quantity * price
                 day_total += val
                 acct_totals[lot.account_id] = acct_totals.get(lot.account_id, Decimal("0")) + val
