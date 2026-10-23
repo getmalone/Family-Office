@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     # Approval Policies
     trade_approval_threshold: Decimal = Decimal("50000")
-    gift_approval_threshold: Decimal = Decimal("18000")
+    gift_approval_threshold: Decimal = Decimal("19000")  # 2026 annual gift exclusion
 
     # Server
     host: str = "127.0.0.1"
