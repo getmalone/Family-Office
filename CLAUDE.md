@@ -20,7 +20,9 @@ Dev docs are in README.md; end-user docs are in USAGE.md and launchers/INSTALL.m
 - Real family data is never committed: `.env`, `*.db`, `data/`, `private/`, `*.csv` are ignored,
   and `scripts/build_release.py` hard-fails if any of them land in a bundle. In a cloud session, use
   seed/test data only.
-- The live app runs on the owner's own laptop from its own `data/family_office.db`.
+- The live app runs on the owner's own laptop. Its database, backups and `.env` live in the per-user data
+  folder from `app/paths.py` (macOS `~/Library/Application Support/FamilyOffice`; override `KFO_DATA_DIR`),
+  not in the install folder. The launcher moves a pre-0.1.29 `data/` + `.env` there once.
   The copy in Google Drive is an encrypted backup, not what the app reads.
 
 ## Codebase rules (each learned from a shipped bug)
@@ -56,13 +58,18 @@ Edit models, then `alembic revision --autogenerate -m "..."`. `alembic/env.py` o
 1. Bump `version` in `pyproject.toml` (`app/version.py` reads it from there).
 2. `./.venv/bin/python scripts/build_release.py` → `dist/family-office-<ver>.zip`. Pure Python, so it
    runs on any OS. **Zips are FLAT** (no wrapper directory); the updater depends on that.
-3. Tag `vX.Y.Z`, push, then
-   `gh release create vX.Y.Z -R getmalone/Family-Office dist/family-office-X.Y.Z.zip`.
+3. Publish a GitHub release for tag `vX.Y.Z` on `main` (cloud sessions can't create releases; the owner
+   publishes). The **Release zip** workflow (`.github/workflows/release-zip.yml`) builds and attaches
+   `family-office-X.Y.Z.zip` on publish; it can be re-run for an existing tag via workflow_dispatch.
    **A release without the zip asset is invisible to zip installs' self-updater.**
 4. Dress rehearsal: `git archive <prev tag> | tar -x -C <scratch>`, add sentinel `data/family_office.db`
    and `.env`, patch `updater._ROOT` + `updater.get_app_version`, call `apply_manual_update()`, and confirm the
    swap lands and data/.env survive.
 - An updater fix can't deliver itself. A stuck install must take the new version by hand.
+- After an in-app update the desktop launcher restarts the app in place (`app/services/restart.py`
+  hook → `launchers/_run.py` re-syncs deps and re-execs on the same port, password kept in env).
+  The updater rewrites only files whose bytes changed, so keep the launchers byte-stable across
+  releases: a changed `.command` makes macOS ask for approval again.
 - The `/settings/check-updates` endpoint must stay network-only in the service worker.
 
 ## Wiki

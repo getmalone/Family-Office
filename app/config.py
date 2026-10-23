@@ -1,18 +1,18 @@
 """
 Application configuration via pydantic-settings.
 
-All settings are loaded from environment variables with the KFO_ prefix,
-or from a .env file in the project root.
+All settings are loaded from environment variables with the KFO_ prefix, or
+from a .env file in the per-user data folder (see app/paths.py; a .env in the
+app folder is still read, with lower priority, for developer checkouts).
 """
 
 from decimal import Decimal
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
-# Absolute path to the .env file regardless of cwd when the server starts
-_ENV_FILE = Path(__file__).parent.parent / ".env"
+from app.paths import default_db_path, env_files
 
 
 class Settings(BaseSettings):
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     """
 
     # Database
-    db_path: str = "data/family_office.db"
+    db_path: str = Field(default_factory=default_db_path)   # per-user data folder
     db_passphrase: str = ""
 
     # LLM
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
 
     model_config = {
         "env_prefix": "KFO_",
-        "env_file": str(_ENV_FILE),
+        "env_file": env_files(),
         "env_file_encoding": "utf-8",
     }
 

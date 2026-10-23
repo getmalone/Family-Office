@@ -232,7 +232,7 @@ The `.env` file path is resolved **absolutely** using `Path(__file__).parent.par
 
 | Setting | Env Var | Default | Notes |
 |---------|---------|---------|-------|
-| `db_path` | `KFO_DB_PATH` | `data/family_office.db` | Relative to project root |
+| `db_path` | `KFO_DB_PATH` | `<data folder>/family_office.db` | Data folder from `app/paths.py` (`KFO_DATA_DIR` overrides) |
 | `db_passphrase` | `KFO_DB_PASSPHRASE` | `""` | For optional SQLCipher encryption |
 | `anthropic_api_key` | `KFO_ANTHROPIC_API_KEY` | `""` | Required for AI features |
 | `openai_api_key` | `KFO_OPENAI_API_KEY` | `""` | Fallback LLM if Anthropic absent |
@@ -258,7 +258,7 @@ KFO_LLM_MODEL=claude-sonnet-4-5
 
 ## 05 Database Schema
 
-The database is a single **SQLite file** (`data/family_office.db`) with WAL mode enabled, foreign key enforcement, and a 5-second busy timeout. Tables are created via `Base.metadata.create_all()` on startup — no migration runner is required for a fresh install.
+The database is a single **SQLite file** (`family_office.db` in the per-user data folder — see `app/paths.py`) with WAL mode enabled, foreign key enforcement, and a 5-second busy timeout. Tables are created via `Base.metadata.create_all()` on startup — no migration runner is required for a fresh install.
 
 ### Entity Relationship Overview
 

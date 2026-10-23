@@ -6,10 +6,11 @@ Git installs: updates are ``vX.Y.Z`` tags; apply = checkout tag + re-sync deps.
 Zip installs (how the app is actually distributed to laptops): updates are
 GitHub Releases carrying a ``family-office-<version>.zip`` bundle. Apply =
 download the bundle, verify it, and swap the CODE in place — only the
-allowlisted app directories/files are replaced, so ``data/`` (the encrypted
-database), ``.env``, ``.venv``, and ``backups/`` are never touched. The next
-launch's ``uv sync --frozen`` installs the new dependency set, exactly like a
-first install.
+allowlisted app directories/files are replaced (and only files whose contents
+changed), so ``.venv`` and any leftover ``data/``/``.env`` are never touched —
+user data lives in the per-user data folder (app/paths.py) anyway. When the
+desktop launcher is running the app it then restarts it in place: re-syncs the
+locked dependencies and starts the new code on the same port.
 
 All network/git calls are best-effort and offline-safe — failure yields
 "no update available" or a clear error message, never a broken install.
@@ -317,6 +318,41 @@ def _pyproject_version(pyproject: Path) -> str:
     return m.group(1) if m else "0.0.0"
 
 
+def _copy_if_changed(src: Path, dst: Path) -> None:
+    """Replace ``dst`` only when its bytes differ. Unchanged files (above all
+    the double-click launchers) stay untouched, so macOS doesn't treat them as
+    new files that need approving again."""
+    if dst.is_file() and dst.read_bytes() == src.read_bytes():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def _sync_tree(src: Path, dst: Path) -> None:
+    """Make ``dst`` match ``src``: copy new/changed files, delete files the new
+    version no longer has (bytecode caches are left to Python)."""
+    wanted = {p.relative_to(src) for p in src.rglob("*") if p.is_file()}
+    for rel in wanted:
+        _copy_if_changed(src / rel, dst / rel)
+    if dst.is_dir():
+        for p in sorted(dst.rglob("*"), reverse=True):
+            rel = p.relative_to(dst)
+            if "__pycache__" in rel.parts:
+                continue
+            if p.is_file() and rel not in wanted:
+                p.unlink()
+            elif p.is_dir() and not any(p.iterdir()):
+                p.rmdir()
+
+
+def _clear_quarantine(root: Path) -> None:
+    """macOS: strip the "downloaded from the internet" flag from the install."""
+    import sys
+    if sys.platform == "darwin" and shutil.which("xattr"):
+        subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(root)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
 def _install_bundle(zip_path: Path, expected_tag: str | None = None) -> tuple[bool, str]:
     """Verify a release zip and swap its code into the install directory.
 
@@ -345,16 +381,12 @@ def _install_bundle(zip_path: Path, expected_tag: str | None = None) -> tuple[bo
 
             for name in _SWAP_DIRS:
                 src = bundle / name
-                if not src.is_dir():
-                    continue
-                dst = _ROOT / name
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.copytree(src, dst)
+                if src.is_dir():
+                    _sync_tree(src, _ROOT / name)
             for name in _SWAP_FILES:
                 src = bundle / name
                 if src.is_file():
-                    shutil.copy2(src, _ROOT / name)
+                    _copy_if_changed(src, _ROOT / name)
 
         # Zip archives don't reliably carry the executable bit — restore it on
         # the double-click launchers so the relaunch actually double-clicks.
@@ -364,9 +396,13 @@ def _install_bundle(zip_path: Path, expected_tag: str | None = None) -> tuple[bo
                     f.chmod(f.stat().st_mode | 0o755)
                 except Exception:
                     pass
+        _clear_quarantine(_ROOT)
     except Exception as exc:  # noqa: BLE001
         return False, f"update failed: {exc}"
 
+    from app.services import restart
+    if restart.can_restart():
+        return True, f"updated to v{bundle_version} — restarting the app…"
     return True, (
         f"updated to v{bundle_version} — quit this app (close its terminal window) and "
         "double-click Family Office to relaunch; the update finishes automatically"

@@ -239,9 +239,29 @@ screen shares. Click again to reveal.
 **Back up regularly.** Your database is the system of record (holdings, tax lots,
 books). Use **Settings → Download encrypted backup** and store the file safely.
 
-**Move to a new computer:** install the app there (section 1), then copy your
-`data/` folder from the old install into the new one before launching, and use
-the same password.
+**Where your data lives.** The database, its backups and your `.env` settings
+are kept in a data folder of their own, separate from the app, so updating the
+app never moves them:
+
+| Computer | Data folder |
+|---|---|
+| Mac | `~/Library/Application Support/FamilyOffice` |
+| Windows | `%APPDATA%\FamilyOffice` |
+| Linux | `~/.local/share/FamilyOffice` |
+
+To use a different folder, set `KFO_DATA_DIR`. Installs from before v0.1.29 kept
+everything in the app's `data/` folder. On the first launch after updating, the
+launcher moves it to the data folder and keeps the old copy as
+`data.moved-<date>`, which you can delete once everything looks right.
+
+**Updating.** Use **Settings → Check for updates** in the same app folder. The
+app installs the update, restarts itself on the same address and reloads the
+page. You don't need to re-enter your password, re-download anything, or move
+any files.
+
+**Move to a new computer:** install the app there (section 1), then copy the data
+folder above from the old computer to the same place on the new one before
+launching, and use the same password.
 
 ---
 
@@ -256,8 +276,9 @@ still updates.
 If neither works, the message links to the releases page. Download
 `family-office-<version>.zip` in your browser (which uses the proxy your machine
 is configured for), then use **Install from file** right below the button. The
-app verifies the bundle and swaps the code exactly as an automatic update does —
-your database, settings, and backups are untouched, and a backup is taken first.
+app verifies the bundle and swaps the code exactly as an automatic update does,
+then restarts itself. Your database, settings and backups are untouched, and a
+backup is taken first.
 
 ## 5. Troubleshooting
 

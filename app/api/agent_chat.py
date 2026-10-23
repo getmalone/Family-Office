@@ -90,17 +90,19 @@ async def portfolio_advice(
 
     api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
 
-    # Last-resort: read directly from .env file in the project root
-    if not api_key:
-        env_file = Path(__file__).parent.parent.parent / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if line.startswith("KFO_ANTHROPIC_API_KEY="):
-                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    if val and val != "your-anthropic-api-key-here":
-                        api_key = val
-                        break
+    # Last-resort: read directly from the .env files (data folder wins)
+    from app.paths import env_files
+    for env_path in reversed(env_files()):
+        env_file = Path(env_path)
+        if api_key or not env_file.exists():
+            continue
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("KFO_ANTHROPIC_API_KEY="):
+                val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if val and val != "your-anthropic-api-key-here":
+                    api_key = val
+                    break
 
     if not api_key:
         return JSONResponse(

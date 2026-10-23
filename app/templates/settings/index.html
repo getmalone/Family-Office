@@ -233,6 +233,22 @@ async function checkUpdates() {
   btn.disabled = false;
 }
 
+// After an in-app update the launcher restarts the app on the same port:
+// wait for it to go down and come back, then reload onto the new version.
+async function waitForRestart(el) {
+  el.innerHTML = '<span class="text-emerald-700 font-medium">✓ Update installed — restarting the app…</span>';
+  const started = Date.now();
+  let wentDown = false;
+  while (Date.now() - started < 10 * 60 * 1000) {          // dependency installs can take a few minutes
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const r = await fetch('/health', {cache: 'no-store'});
+      if (r.ok && (wentDown || Date.now() - started > 15000)) { location.reload(); return; }
+    } catch (e) { wentDown = true; }
+  }
+  el.innerHTML = '<span class="text-amber-700">The app is taking a while to restart — check its terminal window.</span>';
+}
+
 async function uploadUpdate() {
   const form = document.getElementById('upload-update-form');
   const el = document.getElementById('update-result');
@@ -243,6 +259,7 @@ async function uploadUpdate() {
   el.textContent = 'Installing… (about a minute)';
   try {
     const d = await (await fetch('/settings/upload-update', {method: 'POST', body: body, cache: 'no-store'})).json();
+    if (d.ok && d.restarting) { waitForRestart(el); return; }
     el.innerHTML = d.ok
       ? '<span class="text-emerald-700 font-medium">✓ ' + d.message + '.</span>'
       : '<span class="text-red-600">Install failed: ' + d.message + '.</span>';
@@ -258,7 +275,9 @@ async function applyUpdate() {
   try {
     const r = await fetch('/settings/apply-update', {method: 'POST', cache: 'no-store'});
     const d = await r.json();
-    if (d.ok) {
+    if (d.ok && d.restarting) {
+      waitForRestart(el);
+    } else if (d.ok) {
       el.innerHTML = '<span class="text-emerald-700 font-medium">✓ ' + d.message + '.</span>';
     } else {
       el.innerHTML = '<span class="text-red-600">Update failed: ' + d.message +

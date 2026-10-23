@@ -183,7 +183,8 @@ def test_apply_update_endpoint_routes_manual(test_client, monkeypatch):
     monkeypatch.setattr(updater, "apply_manual_update", lambda: (True, "updated to v9.9.9"))
     r = test_client.post("/settings/apply-update")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "message": "updated to v9.9.9", "restart_required": True}
+    assert r.json() == {"ok": True, "message": "updated to v9.9.9",
+                        "restart_required": True, "restarting": False}  # no launcher in tests
 
 
 def test_apply_update_endpoint_409_when_current(test_client, monkeypatch):
