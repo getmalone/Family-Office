@@ -116,7 +116,8 @@ async def portfolio_advice(
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=api_key)
+        from app.services.app_settings import anthropic_default_headers
+        client = anthropic.Anthropic(api_key=api_key, default_headers=anthropic_default_headers())
 
         # Build the full system prompt with live portfolio data embedded
         system = PORTFOLIO_ADVISOR_SYSTEM

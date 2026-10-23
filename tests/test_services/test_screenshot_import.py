@@ -149,3 +149,29 @@ def test_rejected_key_message_names_the_key(monkeypatch):
     monkeypatch.setattr(si, "_api_key_and_source", lambda: ("sk-ant-abcdefgh9876", "Settings / .env"))
     with pytest.raises(si.ScreenshotImportError, match="…9876"):
         si.extract_positions([(PNG, "image/png")], client=Rejecting())
+
+
+def test_workspace_id_sent_as_header(monkeypatch, test_client):
+    from app.config import settings
+    from app.services import app_settings
+    monkeypatch.setattr(settings, "anthropic_workspace_id", "")
+    r = test_client.post("/settings/", data={"anthropic_workspace_id": " wrkspc_abc "}, follow_redirects=False)
+    assert r.status_code == 303
+    assert app_settings.anthropic_default_headers() == {"anthropic-workspace-id": "wrkspc_abc"}
+    test_client.post("/settings/", data={"anthropic_workspace_id": ""}, follow_redirects=False)
+    assert app_settings.anthropic_default_headers() == {}                # cleared
+
+
+def test_unscoped_key_message(monkeypatch):
+    import anthropic
+    import httpx
+
+    class Unscoped(FakeClient):
+        def create(self, **kw):
+            req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            msg = ("This API key is not scoped to a workspace, so this request must include the "
+                   "anthropic-workspace-id header")
+            raise anthropic.BadRequestError(msg, response=httpx.Response(400, request=req), body=None)
+
+    with pytest.raises(si.ScreenshotImportError, match="Workspace ID"):
+        si.extract_positions([(PNG, "image/png")], client=Unscoped())

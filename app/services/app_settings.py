@@ -21,7 +21,7 @@ from app.models.app_setting import AppSetting
 # Keys exposed on the Settings page → attribute on Settings. Values stored in DB
 # take effect only when the corresponding environment variable was NOT set, so
 # an explicit KFO_* env var always wins.
-EDITABLE_KEYS = ("anthropic_api_key", "llm_model")
+EDITABLE_KEYS = ("anthropic_api_key", "anthropic_workspace_id", "llm_model")
 
 # Never echo these back to the browser in full.
 SECRET_KEYS = {"anthropic_api_key", "openai_api_key"}
@@ -53,6 +53,13 @@ PLACEHOLDER_KEYS = {"sk-ant-...", "your-anthropic-api-key-here", "sk-ant-xxx", "
 def is_placeholder(value: str | None) -> bool:
     v = (value or "").strip()
     return not v or v in PLACEHOLDER_KEYS or v.endswith("...")
+
+
+def anthropic_default_headers() -> dict[str, str]:
+    """Headers every Anthropic API call should carry. An API key that isn't
+    scoped to a workspace must name one with ``anthropic-workspace-id``."""
+    wid = (runtime_settings.anthropic_workspace_id or "").strip()
+    return {"anthropic-workspace-id": wid} if wid else {}
 
 
 def load_into_settings(session: Session) -> None:

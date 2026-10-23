@@ -157,7 +157,9 @@ def extract_positions(files: list[tuple[bytes, str]], client=None) -> dict:
                 "Add your Anthropic API key in Settings (the same key the AI assistant uses) "
                 "to read screenshots.")
         anthropic = _import_anthropic()
-        client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=2)
+        from app.services.app_settings import anthropic_default_headers
+        client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=2,
+                                     default_headers=anthropic_default_headers())
 
     content: list[dict] = []
     for i, (data, media_type) in enumerate(files, start=1):
@@ -190,6 +192,11 @@ def extract_positions(files: list[tuple[bytes, str]], client=None) -> dict:
     except anthropic.RateLimitError:
         raise ScreenshotImportError("Anthropic's API is rate-limiting requests — try again in a minute.")
     except anthropic.BadRequestError as exc:
+        if "not scoped to a workspace" in str(exc.message):
+            raise ScreenshotImportError(
+                "Your Anthropic API key isn't tied to a workspace. Either enter your Workspace ID "
+                "(starts with wrkspc_, from the Claude Console under Settings → Workspaces) in "
+                "Settings, or create a new key inside a workspace and paste that instead.")
         raise ScreenshotImportError(f"The screenshots couldn't be processed: {exc.message}")
     except anthropic.APIStatusError as exc:
         raise ScreenshotImportError(f"Anthropic's API returned an error ({exc.status_code}) — try again.")
