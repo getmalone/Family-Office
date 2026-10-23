@@ -35,6 +35,12 @@
                 <div class="flex justify-between"><span class="text-gray-600">Deductible Expenses</span><span class="text-red-600 font-medium">(<span class="bal">${{ "{:,.2f}".format(summary.deductible_expenses) }}</span>)</span></div>
                 <hr>
                 <div class="flex justify-between font-medium text-base"><span>Estimated Tax Liability</span><span><span class="bal">${{ "{:,.2f}".format(summary.estimated_tax_liability) }}</span></span></div>
+                {% if summary.capital_loss_deduction > 0 %}
+                <div class="flex justify-between"><span class="text-gray-600">Capital Loss Deduction (vs. ordinary income)</span><span class="text-blue-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.capital_loss_deduction) }}</span></span></div>
+                {% endif %}
+                {% if summary.wash_sale_disallowed > 0 %}
+                <div class="flex justify-between"><span class="text-gray-600">Wash-Sale Losses Deferred</span><span class="text-amber-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.wash_sale_disallowed) }}</span></span></div>
+                {% endif %}
                 {% if summary.loss_carryforward > 0 %}
                 <div class="flex justify-between"><span class="text-gray-600">Loss Carryforward</span><span class="text-blue-600 font-medium"><span class="bal">${{ "{:,.2f}".format(summary.loss_carryforward) }}</span></span></div>
                 {% endif %}

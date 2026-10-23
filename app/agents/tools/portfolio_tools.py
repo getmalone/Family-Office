@@ -90,14 +90,17 @@ def create_portfolio_tools(session_factory):
         """Execute a sell trade with automatic lot selection. Returns realized gain/loss."""
         with session_factory() as session:
             svc = PortfolioService(session)
-            txn, disposals = svc.execute_sell(
-                account_id=account_id,
-                asset_id=asset_id,
-                quantity=Decimal(str(quantity)),
-                price_per_unit=Decimal(str(price_per_unit)),
-                method=method,
-                notes=notes,
-            )
+            try:
+                txn, disposals = svc.execute_sell(
+                    account_id=account_id,
+                    asset_id=asset_id,
+                    quantity=Decimal(str(quantity)),
+                    price_per_unit=Decimal(str(price_per_unit)),
+                    method=method,
+                    notes=notes,
+                )
+            except ValueError as exc:
+                return f"Sell not executed: {exc}"
             total_gain = sum(d.realized_gain_loss for d in disposals)
             session.commit()
             return (

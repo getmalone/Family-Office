@@ -17,9 +17,38 @@ from app.models.family import FamilyEntity, FamilyMember, Ownership
 from app.schemas.estate import GiftCreate, GiftOut, GRATParams, GRATResult, OwnershipNode
 
 
-# 2026 gift tax exclusion amounts (approximate)
-ANNUAL_EXCLUSION = Decimal("18000")
-LIFETIME_EXEMPTION = Decimal("13610000")  # 2026 projected
+# Federal gift tax amounts by year (IRS inflation adjustments; 2026 per
+# Rev. Proc. 2025-32 and P.L. 119-21, which set the basic exclusion at $15M
+# indexed from 2027). Years after the last entry reuse the latest known figure
+# until the IRS publishes the next one — add a row each autumn.
+ANNUAL_EXCLUSION_BY_YEAR: dict[int, Decimal] = {
+    2023: Decimal("17000"), 2024: Decimal("18000"),
+    2025: Decimal("19000"), 2026: Decimal("19000"),
+}
+LIFETIME_EXEMPTION_BY_YEAR: dict[int, Decimal] = {
+    2023: Decimal("12920000"), 2024: Decimal("13610000"),
+    2025: Decimal("13990000"), 2026: Decimal("15000000"),
+}
+
+
+def _for_year(table: dict[int, Decimal], year: int) -> Decimal:
+    known = [y for y in table if y <= year]
+    return table[max(known)] if known else table[min(table)]
+
+
+def annual_exclusion(year: int) -> Decimal:
+    """Per-donor, per-recipient annual gift exclusion for ``year``."""
+    return _for_year(ANNUAL_EXCLUSION_BY_YEAR, year)
+
+
+def lifetime_exemption(year: int) -> Decimal:
+    """Basic exclusion amount (lifetime gift/estate exemption) for ``year``."""
+    return _for_year(LIFETIME_EXEMPTION_BY_YEAR, year)
+
+
+# Current-year values, kept for callers that import the constants.
+ANNUAL_EXCLUSION = annual_exclusion(date.today().year)
+LIFETIME_EXEMPTION = lifetime_exemption(date.today().year)
 
 
 class EstateService:
@@ -51,15 +80,17 @@ class EstateService:
         else:
             # Calculate used annual exclusion for this specific donor→recipient pair this year
             used = self._get_annual_exclusion_used(
-                data.donor_member_id, data.recipient_member_id, year
+                data.donor_member_id, data.recipient_member_id, year,
+                recipient_entity_id=data.recipient_entity_id,
+                recipient_external=data.recipient_external,
             )
-            remaining_annual = max(Decimal("0"), ANNUAL_EXCLUSION - used)
+            remaining_annual = max(Decimal("0"), annual_exclusion(year) - used)
             annual_applied = min(data.fair_market_value, remaining_annual)
             excess = data.fair_market_value - annual_applied
 
             # Consume lifetime exemption for any amount above the annual exclusion
             lifetime_used = self._get_lifetime_exemption_used(data.donor_member_id)
-            remaining_lifetime = max(Decimal("0"), LIFETIME_EXEMPTION - lifetime_used)
+            remaining_lifetime = max(Decimal("0"), lifetime_exemption(year) - lifetime_used)
             lifetime_applied = min(excess, remaining_lifetime)
 
         gift = Gift(
@@ -224,23 +255,27 @@ class EstateService:
         return nodes
 
     def get_annual_exclusion_remaining(
-        self, donor_id: int, recipient_id: int | None, tax_year: int
+        self, donor_id: int, recipient_id: int | None, tax_year: int,
+        recipient_entity_id: int | None = None, recipient_external: str | None = None,
     ) -> Decimal:
         """Calculate remaining annual gift exclusion for a donor-recipient pair."""
-        used = self._get_annual_exclusion_used(donor_id, recipient_id, tax_year)
-        return max(Decimal("0"), ANNUAL_EXCLUSION - used)
+        used = self._get_annual_exclusion_used(
+            donor_id, recipient_id, tax_year,
+            recipient_entity_id=recipient_entity_id, recipient_external=recipient_external)
+        return max(Decimal("0"), annual_exclusion(tax_year) - used)
 
-    def get_lifetime_exemption_remaining(self, donor_id: int) -> Decimal:
-        """Calculate remaining lifetime gift/estate exemption."""
+    def get_lifetime_exemption_remaining(self, donor_id: int, tax_year: int | None = None) -> Decimal:
+        """Calculate remaining lifetime gift/estate exemption (for ``tax_year``, default this year)."""
         used = self._get_lifetime_exemption_used(donor_id)
-        return max(Decimal("0"), LIFETIME_EXEMPTION - used)
+        return max(Decimal("0"), lifetime_exemption(tax_year or date.today().year) - used)
 
     def _get_annual_exclusion_used(
-        self, donor_id: int, recipient_id: int | None, year: int
+        self, donor_id: int, recipient_id: int | None, year: int,
+        recipient_entity_id: int | None = None, recipient_external: str | None = None,
     ) -> Decimal:
-        # Annual exclusion is per-donor-per-recipient, so always filter to the specific recipient.
-        # When recipient_id is None (entity/external gift) explicitly match NULL rows so we don't
-        # accidentally sum exclusions used for *all* recipients of this donor in the year.
+        # Annual exclusion is per donor, per recipient: a family member, an
+        # entity, or an outside person (matched by name, case-insensitive).
+        # Each outside recipient gets their own exclusion.
         query = self.session.query(func.coalesce(func.sum(Gift.annual_exclusion_applied), 0)).filter(
             Gift.donor_member_id == donor_id,
             Gift.tax_year == year,
@@ -248,8 +283,18 @@ class EstateService:
         )
         if recipient_id is not None:
             query = query.filter(Gift.recipient_member_id == recipient_id)
+        elif recipient_entity_id is not None:
+            query = query.filter(Gift.recipient_member_id == None,  # noqa: E711
+                                 Gift.recipient_entity_id == recipient_entity_id)
+        elif recipient_external and recipient_external.strip():
+            query = query.filter(Gift.recipient_member_id == None,  # noqa: E711
+                                 Gift.recipient_entity_id == None,  # noqa: E711
+                                 func.lower(func.trim(Gift.recipient_external))
+                                 == recipient_external.strip().lower())
         else:
-            query = query.filter(Gift.recipient_member_id == None)  # noqa: E711
+            query = query.filter(Gift.recipient_member_id == None,  # noqa: E711
+                                 Gift.recipient_entity_id == None,  # noqa: E711
+                                 Gift.recipient_external == None)  # noqa: E711
         return Decimal(str(query.scalar() or 0))
 
     def _get_lifetime_exemption_used(self, donor_id: int) -> Decimal:

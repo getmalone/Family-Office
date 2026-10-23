@@ -34,6 +34,7 @@ from app.schemas.analysis import (
     PositionRisk,
     RebalanceAction,
     SsaHousehold,
+    SsaPhase,
     SsaPerson,
     RegimeState,
     ReturnMetrics,
@@ -73,6 +74,73 @@ ASSET_CLASS_ASSUMPTIONS: dict[str, dict[str, float]] = {
     "alternative":     {"return": 0.07, "volatility": 0.15},
     "other":           {"return": 0.06, "volatility": 0.12},
 }
+
+# Long-run correlations between asset classes (annual returns), used to combine
+# per-class volatilities into portfolio volatility: σ_p² = wᵀ Σ w. Treating the
+# classes as uncorrelated made equity-heavy mixes look far safer than they are
+# (US/international stocks move together ~0.85). Order matches the keys above;
+# missing pairs default to 0. The matrix is checked to be positive semi-definite.
+_CORR_ORDER = list(ASSET_CLASS_ASSUMPTIONS)
+_CORR_PAIRS: dict[tuple[str, str], float] = {
+    ("us_equity", "intl_equity"): 0.85, ("us_equity", "fixed_income"): 0.10,
+    ("us_equity", "real_estate"): 0.65, ("us_equity", "private_equity"): 0.75,
+    ("us_equity", "venture_capital"): 0.60, ("us_equity", "hedge_fund"): 0.65,
+    ("us_equity", "commodity"): 0.30, ("us_equity", "crypto"): 0.35,
+    ("us_equity", "alternative"): 0.50, ("us_equity", "other"): 0.60,
+    ("intl_equity", "fixed_income"): 0.10, ("intl_equity", "real_estate"): 0.60,
+    ("intl_equity", "private_equity"): 0.70, ("intl_equity", "venture_capital"): 0.55,
+    ("intl_equity", "hedge_fund"): 0.60, ("intl_equity", "commodity"): 0.40,
+    ("intl_equity", "crypto"): 0.30, ("intl_equity", "alternative"): 0.50,
+    ("intl_equity", "other"): 0.60,
+    ("fixed_income", "real_estate"): 0.25, ("fixed_income", "hedge_fund"): 0.10,
+    ("fixed_income", "cash"): 0.10, ("fixed_income", "alternative"): 0.20,
+    ("fixed_income", "other"): 0.30,
+    ("real_estate", "private_equity"): 0.55, ("real_estate", "venture_capital"): 0.45,
+    ("real_estate", "hedge_fund"): 0.45, ("real_estate", "commodity"): 0.30,
+    ("real_estate", "crypto"): 0.25, ("real_estate", "alternative"): 0.50,
+    ("real_estate", "other"): 0.50,
+    ("private_equity", "venture_capital"): 0.75, ("private_equity", "hedge_fund"): 0.55,
+    ("private_equity", "commodity"): 0.25, ("private_equity", "crypto"): 0.30,
+    ("private_equity", "alternative"): 0.50, ("private_equity", "other"): 0.50,
+    ("venture_capital", "hedge_fund"): 0.45, ("venture_capital", "commodity"): 0.20,
+    ("venture_capital", "crypto"): 0.35, ("venture_capital", "alternative"): 0.45,
+    ("venture_capital", "other"): 0.45,
+    ("hedge_fund", "commodity"): 0.30, ("hedge_fund", "crypto"): 0.30,
+    ("hedge_fund", "alternative"): 0.50, ("hedge_fund", "other"): 0.45,
+    ("commodity", "crypto"): 0.20, ("commodity", "alternative"): 0.30,
+    ("commodity", "other"): 0.30,
+    ("crypto", "alternative"): 0.25, ("crypto", "other"): 0.30,
+    ("alternative", "other"): 0.50,
+}
+
+
+def asset_class_correlation(a: str, b: str) -> float:
+    """Assumed long-run correlation between two asset classes (unknown → 'other')."""
+    a = a if a in ASSET_CLASS_ASSUMPTIONS else "other"
+    b = b if b in ASSET_CLASS_ASSUMPTIONS else "other"
+    if a == b:
+        return 1.0
+    return _CORR_PAIRS.get((a, b), _CORR_PAIRS.get((b, a), 0.0))
+
+
+def portfolio_return_and_vol(allocation: dict[str, float]) -> tuple[float, float]:
+    """Expected simple annual return and volatility of an asset-class mix.
+
+    Weights are normalised; volatility uses the correlation table above
+    (σ_p² = Σᵢ Σⱼ wᵢ wⱼ σᵢ σⱼ ρᵢⱼ). An empty mix falls back to 4% / 5%.
+    """
+    items = [(ac, wt) for ac, wt in allocation.items() if wt > 0]
+    if not items:
+        return 0.04, 0.05
+    classes = [ac for ac, _ in items]
+    w = np.array([wt for _, wt in items], dtype=float)
+    w = w / w.sum()
+    params = [ASSET_CLASS_ASSUMPTIONS.get(ac, ASSET_CLASS_ASSUMPTIONS["other"]) for ac in classes]
+    mu = np.array([p["return"] for p in params])
+    sig = np.array([p["volatility"] for p in params])
+    corr = np.array([[asset_class_correlation(a, b) for b in classes] for a in classes])
+    cov = np.outer(sig, sig) * corr
+    return float(w @ mu), float(np.sqrt(max(float(w @ cov @ w), 0.0)))
 
 # Default target allocations for the 5 system profiles.
 DEFAULT_PROFILES: list[dict] = [
@@ -221,134 +289,155 @@ class AnalysisService:
     def get_risk_metrics(
         self, lookback_days: int = 252, risk_free_rate: float = 0.05
     ) -> RiskMetrics:
-        """Compute portfolio risk metrics from historical price data."""
+        """Compute portfolio risk metrics.
+
+        ``lookback_days`` is in trading days (252 ≈ 1 year). Returns of holdings
+        with price history are aligned by date. Volatility, Sharpe, beta and
+        risk contributions use a full annual covariance matrix: sample
+        covariance among holdings with history, and the asset-class assumptions
+        (volatility × the asset-class correlation table) for holdings without
+        it — deterministic, and contributions sum to 100%. Drawdown and VaR use
+        the dated history of covered holdings, rescaled to the whole
+        portfolio's volatility.
+        """
+        import math
+
         summary = self.portfolio_svc.get_summary()
         total_mv = float(summary.total_market_value)
         if total_mv <= 0:
             return self._empty_risk_metrics(lookback_days, risk_free_rate)
 
-        # Collect per-holding daily returns
         end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_days)
-        holdings_returns: list[tuple[dict, np.ndarray]] = []
-        weights: list[float] = []
+        start_date = end_date - timedelta(days=math.ceil(lookback_days * 365 / 252))
 
-        # Bulk-fetch all symbols at once (single yfinance call, orders of magnitude faster)
-        symbols_needed = [h.symbol for h in summary.holdings if h.symbol]
-        bulk_returns = self._bulk_daily_returns(symbols_needed + ["SPY"], start_date, end_date)
-        spy_returns = bulk_returns.get("SPY")
-
+        # One entry per security: a fund held in several accounts is one position.
+        positions: dict[int, dict] = {}
         for h in summary.holdings:
-            w = float(h.market_value) / total_mv
-            info = {
-                "asset_id": h.asset_id,
-                "symbol": h.symbol,
-                "name": h.name,
-                "asset_class": h.asset_class,
-                "weight": w,
-            }
-            rets = bulk_returns.get(h.symbol) if h.symbol else None
-            if rets is not None and len(rets) > 20:
-                holdings_returns.append((info, rets))
-                weights.append(w)
-                continue
-            # Private asset or insufficient data — use assumed vol
-            assumed = ASSET_CLASS_ASSUMPTIONS.get(h.asset_class, ASSET_CLASS_ASSUMPTIONS["other"])
-            daily_vol = assumed["volatility"] / np.sqrt(252)
-            fake_rets = np.random.normal(assumed["return"] / 252, daily_vol, lookback_days)
-            holdings_returns.append((info, fake_rets))
-            weights.append(w)
-
-        if not holdings_returns:
+            pos = positions.setdefault(h.asset_id, {
+                "asset_id": h.asset_id, "symbol": h.symbol, "name": h.name,
+                "asset_class": h.asset_class, "mv": 0.0,
+            })
+            pos["mv"] += float(h.market_value)
+        pos_list = [p for p in positions.values() if p["mv"] > 0]
+        if not pos_list:
             return self._empty_risk_metrics(lookback_days, risk_free_rate)
+        for pos in pos_list:
+            pos["weight"] = pos["mv"] / total_mv
 
-        # Align returns to common length
-        min_len = min(len(r) for _, r in holdings_returns)
-        aligned = np.column_stack([r[-min_len:] for _, r in holdings_returns])
-        w_arr = np.array(weights)
-        w_arr = w_arr / w_arr.sum()  # normalize
+        symbols = sorted({p["symbol"] for p in pos_list if p["symbol"]})
+        price_map = self._bulk_price_series(symbols + ["SPY"], start_date, end_date)
+        spy_prices = price_map.pop("SPY", None) if "SPY" not in symbols else price_map.get("SPY")
+        hist_syms = [sym for sym in symbols if sym in price_map]
+        rets = self._aligned_returns({sym: price_map[sym] for sym in hist_syms})
+        if len(rets) < 20:
+            rets = rets.iloc[0:0]
+            hist_syms = []
 
-        # Portfolio daily returns
-        port_daily = aligned @ w_arr
+        n = len(pos_list)
+        w = np.array([p["weight"] for p in pos_list])
+        sig = np.empty(n)
+        mu = np.empty(n)
+        hist_idx: dict[int, str] = {}
+        for i, pos in enumerate(pos_list):
+            assumed = ASSET_CLASS_ASSUMPTIONS.get(pos["asset_class"], ASSET_CLASS_ASSUMPTIONS["other"])
+            if pos["symbol"] in hist_syms:
+                col = rets[pos["symbol"]].values
+                hist_idx[i] = pos["symbol"]
+                sig[i] = float(np.std(col, ddof=1) * np.sqrt(252))
+                mu[i] = float(np.mean(col) * 252)
+            else:
+                sig[i] = assumed["volatility"]
+                mu[i] = assumed["return"]
 
-        # Build a trading-day date index for the aligned window so that
-        # drawdown dates are accurate (return indices ≠ calendar day offsets).
-        # We generate the sequence of trading days that yfinance would have
-        # returned for [start_date, end_date], then take the last min_len.
-        import pandas as pd
-        trading_days = pd.bdate_range(start=str(start_date), end=str(end_date))
-        # bdate_range gives open-interval dates; returns are diff of prices so
-        # there is one fewer return than price point — align to min_len.
-        if len(trading_days) > min_len:
-            trading_days = trading_days[-min_len:]
+        # Annual covariance: sample among covered holdings, assumed elsewhere.
+        cov = np.empty((n, n))
+        sample_cov = (np.cov(rets.values, rowvar=False, ddof=1) * 252
+                      if len(hist_syms) > 1 else None)
+        col_of = {sym: j for j, sym in enumerate(rets.columns)}
+        for i in range(n):
+            for j in range(n):
+                if i in hist_idx and j in hist_idx and sample_cov is not None:
+                    cov[i, j] = sample_cov[col_of[hist_idx[i]], col_of[hist_idx[j]]]
+                elif i == j:
+                    cov[i, j] = sig[i] ** 2
+                else:
+                    rho = asset_class_correlation(pos_list[i]["asset_class"], pos_list[j]["asset_class"])
+                    cov[i, j] = rho * sig[i] * sig[j]
 
-        # Annualized metrics
-        port_vol = float(np.std(port_daily) * np.sqrt(252))
-        port_mean = float(np.mean(port_daily) * 252)
+        port_var = float(w @ cov @ w)
+        port_vol = math.sqrt(max(port_var, 0.0))
+        port_mean = float(w @ mu)
         sharpe = (port_mean - risk_free_rate) / port_vol if port_vol > 0 else 0.0
+        marginal = cov @ w
+        history_weight = float(sum(w[i] for i in hist_idx))
 
-        # Max drawdown — use trading_day index for accurate period labels
-        cumulative = np.cumprod(1 + port_daily)
-        running_max = np.maximum.accumulate(cumulative)
-        drawdowns = (cumulative - running_max) / running_max
-        max_dd = float(np.min(drawdowns))
-        dd_end_idx = int(np.argmin(drawdowns))
-        dd_start_idx = int(np.argmax(cumulative[:dd_end_idx + 1])) if dd_end_idx > 0 else 0
-        if len(trading_days) > dd_end_idx:
-            dd_start_date = trading_days[dd_start_idx].date()
-            dd_end_date   = trading_days[dd_end_idx].date()
-        else:
-            dd_start_date = start_date + timedelta(days=dd_start_idx)
-            dd_end_date   = start_date + timedelta(days=dd_end_idx)
-        dd_period = f"{dd_start_date} to {dd_end_date}"
+        # Beta vs SPY: sample beta for covered holdings when SPY history exists,
+        # otherwise ρ(class, US equity) × σ_i / σ_SPY from the assumptions.
+        spy_rets = None
+        if spy_prices is not None and len(rets):
+            joined = self._aligned_returns({"_p": price_map[hist_syms[0]], "SPY": spy_prices})
+            spy_rets = joined["SPY"].reindex(rets.index).dropna()
+        spy_vol = (float(np.std(spy_rets.values, ddof=1) * np.sqrt(252))
+                   if spy_rets is not None and len(spy_rets) >= 20 else
+                   ASSET_CLASS_ASSUMPTIONS["us_equity"]["volatility"])
+        betas = np.empty(n)
+        for i, pos in enumerate(pos_list):
+            if i in hist_idx and spy_rets is not None and len(spy_rets) >= 20:
+                r_i = rets[hist_idx[i]].reindex(spy_rets.index).values
+                c = np.cov(r_i, spy_rets.values, ddof=1)
+                betas[i] = c[0, 1] / c[1, 1] if c[1, 1] > 0 else 0.0
+            else:
+                betas[i] = asset_class_correlation(pos["asset_class"], "us_equity") * sig[i] / spy_vol
+        port_beta = float(w @ betas)
 
-        # Portfolio beta vs SPY
-        port_beta = 0.0
-        if spy_returns is not None and len(spy_returns) >= min_len:
-            spy_aligned = spy_returns[-min_len:]
-            cov = np.cov(port_daily, spy_aligned)
-            spy_var = cov[1, 1]
-            port_beta = float(cov[0, 1] / spy_var) if spy_var > 0 else 0.0
+        # Daily portfolio series for drawdown / VaR: covered holdings on their
+        # common dates, rescaled so its volatility matches the whole portfolio's.
+        port_daily = np.array([])
+        if hist_idx:
+            w_hist = np.array([w[i] for i in hist_idx]) / history_weight
+            series = rets[[hist_idx[i] for i in hist_idx]].values @ w_hist
+            hist_vol = float(np.std(series, ddof=1) * np.sqrt(252))
+            port_daily = series * (port_vol / hist_vol) if hist_vol > 0 else series
+
+        max_dd = 0.0
+        dd_period = "insufficient price history"
+        if len(port_daily):
+            # Include the starting value (1.0) so a loss on day one counts.
+            cumulative = np.concatenate([[1.0], np.cumprod(1 + port_daily)])
+            running_max = np.maximum.accumulate(cumulative)
+            drawdowns = cumulative / running_max - 1
+            dd_end_idx = int(np.argmin(drawdowns))
+            dd_start_idx = int(np.argmax(cumulative[:dd_end_idx + 1]))
+            max_dd = float(drawdowns[dd_end_idx])
+            # cumulative[k] is the value on the k-th common price date.
+            import pandas as pd
+            common = pd.DataFrame({sym: price_map[sym] for sym in hist_syms}).dropna().index
+            dates = list(common)
+            dd_period = f"{dates[dd_start_idx]} to {dates[dd_end_idx]}"
 
         # Per-position risk
         position_risks = []
-        for i, (info, rets) in enumerate(holdings_returns):
-            rets_aligned = rets[-min_len:]
-            pos_vol = float(np.std(rets_aligned) * np.sqrt(252))
-            pos_beta = None
-            if spy_returns is not None and len(spy_returns) >= min_len:
-                spy_a = spy_returns[-min_len:]
-                cov_pos = np.cov(rets_aligned, spy_a)
-                spy_v = cov_pos[1, 1]
-                pos_beta = float(cov_pos[0, 1] / spy_v) if spy_v > 0 else None
-
-            # Risk contribution % = w_i * Cov(r_i, r_p)_annual / Var(r_p)_annual * 100
-            # This formula ensures contributions sum exactly to 100%.
-            # Both covariance and variance are annualised by multiplying daily values by 252.
-            cov_with_port_daily = float(np.cov(rets_aligned, port_daily)[0, 1])
-            cov_with_port_annual = cov_with_port_daily * 252
-            port_var = port_vol ** 2  # port_vol is already annualised
-            risk_contrib = (w_arr[i] * cov_with_port_annual / port_var * 100) if port_var > 0 else 0
-
+        for i, pos in enumerate(pos_list):
+            risk_contrib = (w[i] * marginal[i] / port_var * 100) if port_var > 0 else 0.0
             position_risks.append(PositionRisk(
-                asset_id=info["asset_id"],
-                symbol=info["symbol"],
-                name=info["name"],
-                asset_class=info["asset_class"],
-                weight_pct=Decimal(str(round(info["weight"] * 100, 2))),
-                annualized_volatility=Decimal(str(round(pos_vol * 100, 2))),
-                beta=Decimal(str(round(pos_beta, 3))) if pos_beta is not None else None,
-                risk_contribution_pct=Decimal(str(round(risk_contrib, 2))),
+                asset_id=pos["asset_id"],
+                symbol=pos["symbol"],
+                name=pos["name"],
+                asset_class=pos["asset_class"],
+                weight_pct=Decimal(str(round(pos["weight"] * 100, 2))),
+                annualized_volatility=Decimal(str(round(sig[i] * 100, 2))),
+                beta=Decimal(str(round(float(betas[i]), 3))),
+                risk_contribution_pct=Decimal(str(round(float(risk_contrib), 2))),
             ))
 
-        # Concentration
-        sorted_weights = sorted([float(h.weight_pct) for h in summary.holdings], reverse=True)
+        # Concentration — per security (accounts merged)
+        sorted_weights = sorted([p["weight"] * 100 for p in pos_list], reverse=True)
         top5 = sum(sorted_weights[:5])
         top10 = sum(sorted_weights[:10])
         # HHI in DOJ convention: weights are expressed as percentages (0–100),
         # so a single-holding portfolio → 100² = 10,000 (maximum concentration).
-        hhi = sum(w ** 2 for w in sorted_weights)
-        largest = max(summary.holdings, key=lambda h: h.weight_pct)
+        hhi = sum(x ** 2 for x in sorted_weights)
+        largest = max(pos_list, key=lambda p: p["weight"])
 
         # Look-through HHI: expand each ETF/fund to its underlying securities.
         # For each holding use either its own symbol or a look_through_ticker
@@ -375,8 +464,8 @@ class AnalysisService:
         concentration = ConcentrationRisk(
             top_5_weight_pct=Decimal(str(round(top5, 2))),
             top_10_weight_pct=Decimal(str(round(top10, 2))),
-            largest_position=largest.symbol or largest.name,
-            largest_position_weight_pct=largest.weight_pct,
+            largest_position=largest["symbol"] or largest["name"],
+            largest_position_weight_pct=Decimal(str(round(largest["weight"] * 100, 2))),
             hhi_index=Decimal(str(round(hhi, 2))),
             hhi_lookthrough=Decimal(str(round(lt_hhi, 2))) if lt_hhi is not None else None,
             hhi_lookthrough_positions=lt_positions,
@@ -384,44 +473,35 @@ class AnalysisService:
             hhi_lookthrough_top=lt_top,
         )
 
-        # Asset class risk (use same Var-normalised formula as position level)
+        # Asset class risk: weight, volatility and contribution from the same
+        # covariance matrix (class contributions sum to 100% too).
         ac_risks = []
         ac_groups: dict[str, list[int]] = {}
-        for i, (info, _) in enumerate(holdings_returns):
-            ac_groups.setdefault(info["asset_class"], []).append(i)
-
-        port_var = port_vol ** 2  # annualised variance (reused below for VaR too)
-        for ac, indices in ac_groups.items():
-            ac_weight = sum(w_arr[i] for i in indices)
-            ac_rets = sum(aligned[-min_len:, i] * w_arr[i] for i in indices) / ac_weight if ac_weight > 0 else np.zeros(min_len)
-            ac_vol = float(np.std(ac_rets) * np.sqrt(252))
-            cov_ac_daily = float(np.cov(ac_rets, port_daily)[0, 1])
-            cov_ac_annual = cov_ac_daily * 252
-            contrib = (ac_weight * cov_ac_annual / port_var * 100) if port_var > 0 else 0
-
+        for i, pos in enumerate(pos_list):
+            ac_groups.setdefault(pos["asset_class"], []).append(i)
+        for ac, idx in ac_groups.items():
+            ac_weight = float(sum(w[i] for i in idx))
+            w_ac = np.zeros(n)
+            w_ac[idx] = w[idx]
+            ac_vol = math.sqrt(max(float(w_ac @ cov @ w_ac), 0.0)) / ac_weight if ac_weight > 0 else 0.0
+            contrib = (float(w_ac @ marginal) / port_var * 100) if port_var > 0 else 0.0
             ac_risks.append(AssetClassRisk(
                 asset_class=ac,
-                weight_pct=Decimal(str(round(float(ac_weight) * 100, 2))),
+                weight_pct=Decimal(str(round(ac_weight * 100, 2))),
                 annualized_volatility=Decimal(str(round(ac_vol * 100, 2))),
                 contribution_to_risk=Decimal(str(round(contrib, 2))),
             ))
 
-        # Value-at-Risk and CVaR (Historical Simulation — no normality assumption)
-        total_mv_dec = Decimal(str(round(total_mv, 2)))
+        # Value-at-Risk and CVaR (historical simulation on the dated series)
         sorted_rets = np.sort(port_daily)
         var_95 = cvar_95 = var_99 = cvar_99 = None
         if len(sorted_rets) >= 20:
             idx_95 = max(0, int(np.floor(0.05 * len(sorted_rets))))
             idx_99 = max(0, int(np.floor(0.01 * len(sorted_rets))))
-            var_95_ret = float(sorted_rets[idx_95])
-            var_99_ret = float(sorted_rets[idx_99])
-            cvar_95_ret = float(np.mean(sorted_rets[:idx_95 + 1]))
-            cvar_99_ret = float(np.mean(sorted_rets[:idx_99 + 1]))
-            # Express as positive dollar losses
-            var_95 = Decimal(str(round(abs(var_95_ret) * total_mv, 2)))
-            cvar_95 = Decimal(str(round(abs(cvar_95_ret) * total_mv, 2)))
-            var_99 = Decimal(str(round(abs(var_99_ret) * total_mv, 2)))
-            cvar_99 = Decimal(str(round(abs(cvar_99_ret) * total_mv, 2)))
+            var_95 = Decimal(str(round(abs(float(sorted_rets[idx_95])) * total_mv, 2)))
+            cvar_95 = Decimal(str(round(abs(float(np.mean(sorted_rets[:idx_95 + 1]))) * total_mv, 2)))
+            var_99 = Decimal(str(round(abs(float(sorted_rets[idx_99])) * total_mv, 2)))
+            cvar_99 = Decimal(str(round(abs(float(np.mean(sorted_rets[:idx_99 + 1]))) * total_mv, 2)))
 
         return RiskMetrics(
             portfolio_volatility=Decimal(str(round(port_vol * 100, 2))),
@@ -438,108 +518,109 @@ class AnalysisService:
             position_risks=sorted(position_risks, key=lambda p: p.weight_pct, reverse=True),
             concentration=concentration,
             asset_class_risks=sorted(ac_risks, key=lambda a: a.weight_pct, reverse=True),
+            history_coverage_pct=Decimal(str(round(history_weight * 100, 1))),
         )
 
-    def _bulk_daily_returns(
-        self, symbols: list[str], start_date: date, end_date: date
-    ) -> dict[str, np.ndarray | None]:
+    def _bulk_price_series(
+        self, symbols: list[str], start_date: date, end_date: date, min_coverage: float = 0.6,
+    ) -> "dict[str, pd.Series]":
+        """Daily closing prices per symbol, indexed by date (DB first, then one
+        bulk yfinance download in refresh contexts only).
+
+        DB history is used when it covers at least ``min_coverage`` of the
+        window's expected trading days (min 10 rows). Weekend rows of non-crypto
+        assets are dropped — a weekend snapshot just repeats Friday's close and
+        would add fake zero-return days. Series with a ±99% one-day move are
+        treated as corrupt and skipped.
         """
-        Fetch daily returns for multiple symbols in a single yfinance call.
-        Falls back to DB price history when available. Much faster than per-ticker calls.
-        """
+        import pandas as pd
+
         if not symbols:
             return {}
-
-        results: dict[str, np.ndarray | None] = {}
-
-        # First: use DB price history (instant, no network) — but only when
-        # the DB has enough rows to meaningfully cover the requested lookback.
-        # ~70% of calendar days are trading days, so require at least 60% coverage
-        # of *expected trading days* (calendar_days × 0.70 × 0.60 ≈ 42%).
-        # The hard minimum is 10 (not 30) so short lookbacks (e.g. 30 days → only
-        # ~22 trading days available) can still use DB data. The old max(30, ...)
-        # caused short-window lookbacks to always fall through to yfinance, which
-        # then returns 9 NaN weekend rows out of 30 → only 20 valid returns →
-        # the ">20" holding threshold silently fell through to assumed returns for
-        # every holding except crypto (BTC trades 7 days/week).
-        calendar_days = max(1, (end_date - start_date).days)
-        min_rows_required = max(10, int(calendar_days * 0.60))
+        expected = max(1, (end_date - start_date).days) * 252 / 365
+        min_rows = max(10, int(expected * min_coverage))
+        results: dict[str, pd.Series] = {}
 
         from app.models.asset import Asset as AssetModel
         db_assets = {
-            a.symbol: a.id
-            for a in self.session.query(AssetModel)
-            .filter(AssetModel.symbol.in_(symbols))
-            .all()
+            a.symbol: a
+            for a in self.session.query(AssetModel).filter(AssetModel.symbol.in_(symbols)).all()
             if a.symbol
         }
-        for sym, asset_id in db_assets.items():
-            prices_rows = (
-                self.session.query(AssetPrice)
-                .filter(
-                    AssetPrice.asset_id == asset_id,
-                    AssetPrice.price_date >= start_date,
-                    AssetPrice.price_date <= end_date,
-                )
+        for sym, asset in db_assets.items():
+            rows = (
+                self.session.query(AssetPrice.price_date, AssetPrice.close_price)
+                .filter(AssetPrice.asset_id == asset.id,
+                        AssetPrice.price_date >= start_date,
+                        AssetPrice.price_date <= end_date)
                 .order_by(AssetPrice.price_date)
                 .all()
             )
-            if len(prices_rows) >= min_rows_required:
-                prices = np.array([float(p.close_price) for p in prices_rows])
-                rets = np.diff(prices) / prices[:-1]
-                # Sanity-check: if any single-day return exceeds ±99%, the DB
-                # history is corrupted (e.g. wrong magnitude). Fall back to yfinance.
-                if np.any(np.abs(rets) > 0.99):
-                    continue
-                results[sym] = rets
+            is_crypto = str(getattr(asset.asset_class, "value", asset.asset_class)) == "crypto"
+            pts = {d: float(px) for d, px in rows if is_crypto or d.weekday() < 5}
+            if len(pts) < min_rows:
+                continue
+            ser = pd.Series(pts).sort_index()
+            if (ser.pct_change().abs() > 0.99).any():
+                continue
+            results[sym] = ser
 
-        # Second: bulk-download remaining symbols from yfinance — but ONLY in an
+        # Bulk-download remaining symbols from yfinance — but ONLY in an
         # explicit-refresh context. During an ordinary page render we never hit
         # the network (it scales with portfolio size and would hang the page);
-        # symbols without stored history simply fall back to assumed returns.
+        # symbols without stored history simply count as "no history".
         # Fetch by the Yahoo-safe form (BRK/B → BRK-B) and skip symbols no feed
         # can resolve (CUSIPs, subtotal rows) — they can only fail noisily.
         missing_by_ysym: dict[str, list[str]] = {}
-        for s in symbols:
-            if s in results:
+        for sym in symbols:
+            if sym in results:
                 continue
-            ysym = yahoo_symbol(s)
+            ysym = yahoo_symbol(sym)
             if ysym is not None:
-                missing_by_ysym.setdefault(ysym, []).append(s)
+                missing_by_ysym.setdefault(ysym, []).append(sym)
         if missing_by_ysym and network_allowed():
             try:
                 import yfinance as yf
                 fetch_syms = list(missing_by_ysym)
-                raw = yf.download(
-                    fetch_syms,
-                    start=str(start_date),
-                    end=str(end_date),
-                    auto_adjust=True,
-                    progress=False,
-                    threads=True,
-                )
+                raw = yf.download(fetch_syms, start=str(start_date),
+                                  end=str(end_date + timedelta(days=1)),   # end is exclusive
+                                  auto_adjust=True, progress=False, threads=True)
                 if not raw.empty:
                     close = raw["Close"] if "Close" in raw.columns else raw
-                    if hasattr(close, "columns"):
-                        for ysym, origs in missing_by_ysym.items():
-                            if ysym in close.columns:
-                                col = close[ysym].dropna()
-                                if len(col) >= 10:
-                                    p = col.values
-                                    for sym in origs:
-                                        results[sym] = np.diff(p) / p[:-1]
-                    else:
-                        # Single ticker — close is a Series
-                        if len(fetch_syms) == 1:
-                            col = close.dropna()
-                            if len(col) >= 10:
-                                p = col.values
-                                for sym in missing_by_ysym[fetch_syms[0]]:
-                                    results[sym] = np.diff(p) / p[:-1]
+                    cols = ({y: close[y] for y in missing_by_ysym if y in close.columns}
+                            if hasattr(close, "columns") else
+                            ({fetch_syms[0]: close} if len(fetch_syms) == 1 else {}))
+                    for ysym, col in cols.items():
+                        col = col.dropna()
+                        if len(col) >= 10:
+                            ser = pd.Series(col.values, index=[ts.date() for ts in col.index])
+                            for sym in missing_by_ysym[ysym]:
+                                results[sym] = ser
             except Exception:
                 pass
 
         return results
+
+    def _bulk_daily_returns(
+        self, symbols: list[str], start_date: date, end_date: date
+    ) -> dict[str, np.ndarray | None]:
+        """Per-symbol simple daily returns (each series on its own dates).
+        Combine several symbols with _aligned_returns, which joins on dates."""
+        return {
+            sym: np.diff(ser.values) / ser.values[:-1]
+            for sym, ser in self._bulk_price_series(symbols, start_date, end_date).items()
+        }
+
+    def _aligned_returns(self, price_map: "dict[str, pd.Series]") -> "pd.DataFrame":
+        """Simple daily returns of several symbols on their COMMON dates: prices
+        are inner-joined by date first, so a missing day in one series spans two
+        days for everyone instead of shifting every earlier return by one."""
+        import pandas as pd
+
+        if not price_map:
+            return pd.DataFrame()
+        prices = pd.DataFrame(price_map).sort_index().dropna(how="any")
+        return prices.pct_change().iloc[1:]
 
     def _get_daily_returns(
         self, symbol: str, start_date: date, end_date: date
@@ -936,11 +1017,12 @@ class AnalysisService:
                 from app.services.markov_regime_service import MarkovRegimeService
                 from app.services.market_data import stored_price_map
                 symbols = [h.symbol for h in summary.holdings if h.symbol]
-                weights = {
-                    h.symbol: float(h.market_value) / initial_value
-                    for h in summary.holdings
-                    if h.symbol and float(h.market_value) > 0
-                }
+                # Holdings are per (asset, account): sum a symbol held in several
+                # accounts instead of letting the last account overwrite the rest.
+                weights: dict[str, float] = {}
+                for h in summary.holdings:
+                    if h.symbol and float(h.market_value) > 0:
+                        weights[h.symbol] = weights.get(h.symbol, 0.0) + float(h.market_value) / initial_value
                 if symbols:
                     # Stored history only — same source the morning brief uses.
                     # This used to be a live 2-year yf.download of every raw
@@ -978,61 +1060,45 @@ class AnalysisService:
         spouse_claiming_age: int | None = None,
         spouse_current_age: int | None = None,
         spouse_fra_age: int = 67,
+        income_bridge: bool = False,
+        bucket_balances: dict[str, float] | None = None,
+        deferred_tax_rate: float = 0.18,
+        taxable_tax_rate: float = 0.10,
         target_survival: float = 85.0,
         max_rate: float = 20.0,
     ) -> "MaxSpendingResult":
         """Find the highest withdrawal rate keeping portfolio survival ≥ target.
 
-        Survival is monotonically decreasing in the withdrawal rate, so we binary-
-        search the rate (reusing the same simulation engine, regime, and SSA/age
-        scenario as the displayed run) for the crossing point.
+        Uses exactly the displayed run's scenario (_mc_scenario: ages, household
+        SSA, income bridge, taxes, buckets). With a fixed-dollar withdrawal and
+        common random numbers, survival falls as the rate rises, so a binary
+        search finds the crossing point.
         """
         from app.schemas.analysis import MaxSpendingResult
 
-        summary = self.portfolio_svc.get_summary()
-        initial_value = float(summary.total_market_value) or 1.0
-        regime = self._resolve_portfolio_regime(summary, initial_value, regime_override)
-        current_alloc = {k: float(v) / 100 for k, v in summary.allocation.items()}
-
-        if current_age is not None and retirement_age is not None:
-            years = max(0, int(retirement_age) - int(current_age))
-
-        ssa_factor: float | None = None
-        if (ssa_monthly_fra and float(ssa_monthly_fra) > 0
-                and ssa_claiming_age is not None and retirement_age is not None):
-            ssa_factor = self._ssa_claiming_factor(int(ssa_claiming_age), int(fra_age))
-
-        wy = int(withdrawal_years)
-        # Same household (one- or two-earner) schedule as run_monte_carlo, so the
-        # solver sees both checks during the joint lifetime, not just the primary's.
-        ssa_schedule, ssa_household = self._household_ssa(
-            withdrawal_years=wy,
-            accumulation_years=years,
-            retirement_age=int(retirement_age) if retirement_age is not None else None,
-            primary_monthly_fra=float(ssa_monthly_fra),
-            primary_claiming_age=int(ssa_claiming_age) if ssa_claiming_age is not None else None,
-            primary_fra_age=int(fra_age),
-            spouse_monthly_fra=float(spouse_monthly_fra),
-            spouse_claiming_age=int(spouse_claiming_age) if spouse_claiming_age is not None else None,
-            spouse_current_age=int(spouse_current_age) if spouse_current_age is not None else None,
-            spouse_fra_age=int(spouse_fra_age),
+        sc = self._mc_scenario(
+            years=years, withdrawal_years=withdrawal_years, regime_override=regime_override,
+            current_age=current_age, retirement_age=retirement_age,
+            ssa_claiming_age=ssa_claiming_age, ssa_monthly_fra=ssa_monthly_fra, fra_age=fra_age,
+            spouse_monthly_fra=spouse_monthly_fra, spouse_claiming_age=spouse_claiming_age,
+            spouse_current_age=spouse_current_age, spouse_fra_age=spouse_fra_age,
+            income_bridge=income_bridge, bucket_balances=bucket_balances,
+            deferred_tax_rate=deferred_tax_rate, taxable_tax_rate=taxable_tax_rate,
         )
-        ca = int(current_age) if current_age is not None else None
-        ra = int(retirement_age) if retirement_age is not None else None
-        sca = int(ssa_claiming_age) if ssa_claiming_age is not None else None
+        wy = int(withdrawal_years)
         target = float(target_survival)
 
         def _sim_at(rate: float):
             return self._simulate(
-                label="solve", allocation=current_alloc, initial_value=initial_value,
-                years=years, num_simulations=num_simulations, goal_amount=None,
-                regime=regime, monthly_contribution=float(monthly_contribution),
+                label="solve", allocation=sc["allocation"], initial_value=sc["initial_value"],
+                years=sc["years"], num_simulations=num_simulations, goal_amount=None,
+                regime=sc["regime"], monthly_contribution=float(monthly_contribution),
                 withdrawal_rate=rate, withdrawal_years=wy,
                 spending_pattern=spending_pattern,
                 smile_slow_pct=smile_slow_pct, smile_no_pct=smile_no_pct,
-                current_age=ca, retirement_age=ra, ssa_claiming_age=sca,
-                ssa_fra_factor=ssa_factor,
-                ssa_schedule=ssa_schedule, ssa_household=ssa_household,
+                current_age=sc["current_age"], retirement_age=sc["retirement_age"],
+                ssa_claiming_age=sc["ssa_claiming_age"], ssa_fra_factor=sc["ssa_fra_factor"],
+                **sc["shared_kwargs"],
             )
 
         def _survival(rate: float) -> float:
@@ -1040,6 +1106,8 @@ class AnalysisService:
             return float(r.portfolio_survival_rate or 0.0)
 
         # Binary search for the highest rate whose survival is still ≥ target.
+        # The lowest rate tried (~0) must meet the target, else it's unreachable.
+        reachable = True
         if _survival(max_rate) >= target:
             best = max_rate
         else:
@@ -1051,6 +1119,7 @@ class AnalysisService:
                 else:
                     hi = mid
             best = lo
+            reachable = _survival(best) >= target
 
         r = _sim_at(best)
         annual = r.withdrawal_annual_amount or Decimal("0")
@@ -1062,45 +1131,34 @@ class AnalysisService:
             achieved_survival=r.portfolio_survival_rate or Decimal("0"),
             ssa_annual_benefit=r.ssa_annual_benefit,
             withdrawal_years=wy,
+            target_reachable=reachable,
+            income_bridge=bool(r.income_bridge),
         )
 
-    def run_monte_carlo(
+    def _mc_scenario(
         self,
-        years: int = 10,
-        num_simulations: int = 1000,
-        goal_amount: Decimal | None = None,
-        include_target: bool = True,
-        monthly_contribution: Decimal = Decimal("0"),
-        withdrawal_rate: Decimal = Decimal("0"),
-        withdrawal_years: int = 0,
-        regime_override: str | None = None,  # "bull" | "sideways" | "bear" | "base" | None=auto
-        spending_pattern: str = "constant",  # "constant" | "smile"
-        smile_slow_pct: float = 80.0,
-        smile_no_pct: float = 65.0,
-        current_age: int | None = None,
-        retirement_age: int | None = None,
-        ssa_claiming_age: int | None = None,
-        ssa_monthly_fra: Decimal = Decimal("0"),  # est. monthly benefit at Full Retirement Age (67)
-        fra_age: int = 67,                                  # primary's full retirement age (66–67)
-        spouse_monthly_fra: Decimal = Decimal("0"),         # spouse benefit at their FRA ($/mo)
-        spouse_claiming_age: int | None = None,             # spouse claims at this age (62–70)
-        spouse_current_age: int | None = None,              # spouse's age today (places them on the timeline)
-        spouse_fra_age: int = 67,                           # spouse's full retirement age (66–67)
-        income_bridge: bool = False,                       # model account-type withdrawal sequencing + taxes
-        bucket_balances: dict[str, float] | None = None,   # taxable/traditional/roth $; auto-derived if None
-        deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
-        taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
-    ) -> MonteCarloComparison:
-        """
-        Run Monte Carlo simulation for current allocation and optionally target.
-
-        Uses geometric Brownian motion with annual steps. Per-asset-class return
-        and volatility are from historical data or ASSET_CLASS_ASSUMPTIONS.
-
-        Applies Markov regime conditioning to the first 2 years of the simulation:
-          Bull  regime → +2% expected return boost, −10% volatility (year 1: full, year 2: half)
-          Bear  regime → −3% return drag,           +20% volatility
-          Sideways     → base assumptions
+        *,
+        years: int,
+        withdrawal_years: int,
+        regime_override: str | None,
+        current_age: int | None,
+        retirement_age: int | None,
+        ssa_claiming_age: int | None,
+        ssa_monthly_fra: Decimal,
+        fra_age: int,
+        spouse_monthly_fra: Decimal,
+        spouse_claiming_age: int | None,
+        spouse_current_age: int | None,
+        spouse_fra_age: int,
+        income_bridge: bool,
+        bucket_balances: dict[str, float] | None,
+        deferred_tax_rate: float,
+        taxable_tax_rate: float,
+    ) -> dict:
+        """Everything a Monte Carlo run needs besides the allocation and the
+        withdrawal rate: starting value, regime, timeline, household SSA
+        schedule and income-bridge buckets. Shared by run_monte_carlo and
+        solve_max_spending so the solver always tests the displayed scenario.
         """
         summary = self.portfolio_svc.get_summary()
         initial_value = float(summary.total_market_value)
@@ -1112,8 +1170,6 @@ class AnalysisService:
         # Current allocation weights
         current_alloc = {k: float(v) / 100 for k, v in summary.allocation.items()}
 
-        monthly_contrib_float  = float(monthly_contribution)
-        withdrawal_rate_float  = float(withdrawal_rate)
         withdrawal_years_int   = int(withdrawal_years)
 
         # ── Retirement timeline & Social Security ─────────────────────────────
@@ -1173,6 +1229,69 @@ class AnalysisService:
             deferred_tax_rate=deferred_tax_rate,
             taxable_tax_rate=taxable_tax_rate,
         )
+        return dict(
+            initial_value=initial_value, regime=portfolio_regime, allocation=current_alloc,
+            years=years, current_age=ca, retirement_age=ra, ssa_claiming_age=sca,
+            ssa_fra_factor=ssa_fra_factor, shared_kwargs=shared_kwargs,
+        )
+
+    def run_monte_carlo(
+        self,
+        years: int = 10,
+        num_simulations: int = 1000,
+        goal_amount: Decimal | None = None,
+        include_target: bool = True,
+        monthly_contribution: Decimal = Decimal("0"),
+        withdrawal_rate: Decimal = Decimal("0"),
+        withdrawal_years: int = 0,
+        regime_override: str | None = None,  # "bull" | "sideways" | "bear" | "base" | None=auto
+        spending_pattern: str = "constant",  # "constant" | "smile"
+        smile_slow_pct: float = 80.0,
+        smile_no_pct: float = 65.0,
+        current_age: int | None = None,
+        retirement_age: int | None = None,
+        ssa_claiming_age: int | None = None,
+        ssa_monthly_fra: Decimal = Decimal("0"),  # est. monthly benefit at Full Retirement Age (67)
+        fra_age: int = 67,                                  # primary's full retirement age (66–67)
+        spouse_monthly_fra: Decimal = Decimal("0"),         # spouse benefit at their FRA ($/mo)
+        spouse_claiming_age: int | None = None,             # spouse claims at this age (62–70)
+        spouse_current_age: int | None = None,              # spouse's age today (places them on the timeline)
+        spouse_fra_age: int = 67,                           # spouse's full retirement age (66–67)
+        income_bridge: bool = False,                       # model account-type withdrawal sequencing + taxes
+        bucket_balances: dict[str, float] | None = None,   # taxable/traditional/roth $; auto-derived if None
+        deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
+        taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
+    ) -> MonteCarloComparison:
+        """
+        Run Monte Carlo simulation for current allocation and optionally target.
+
+        Uses geometric Brownian motion with annual steps. Per-asset-class return
+        and volatility are from historical data or ASSET_CLASS_ASSUMPTIONS.
+
+        Applies Markov regime conditioning to the first 2 years of the simulation:
+          Bull  regime → +2% expected return boost, −10% volatility (year 1: full, year 2: half)
+          Bear  regime → −3% return drag,           +20% volatility
+          Sideways     → base assumptions
+        """
+        sc = self._mc_scenario(
+            years=years, withdrawal_years=withdrawal_years, regime_override=regime_override,
+            current_age=current_age, retirement_age=retirement_age,
+            ssa_claiming_age=ssa_claiming_age, ssa_monthly_fra=ssa_monthly_fra, fra_age=fra_age,
+            spouse_monthly_fra=spouse_monthly_fra, spouse_claiming_age=spouse_claiming_age,
+            spouse_current_age=spouse_current_age, spouse_fra_age=spouse_fra_age,
+            income_bridge=income_bridge, bucket_balances=bucket_balances,
+            deferred_tax_rate=deferred_tax_rate, taxable_tax_rate=taxable_tax_rate,
+        )
+        initial_value = sc["initial_value"]
+        portfolio_regime = sc["regime"]
+        current_alloc = sc["allocation"]
+        years = sc["years"]
+        ca, ra, sca = sc["current_age"], sc["retirement_age"], sc["ssa_claiming_age"]
+        ssa_fra_factor = sc["ssa_fra_factor"]
+        shared_kwargs = sc["shared_kwargs"]
+        monthly_contrib_float  = float(monthly_contribution)
+        withdrawal_rate_float  = float(withdrawal_rate)
+        withdrawal_years_int   = int(withdrawal_years)
 
         # Run simulation for current allocation
         current_result = self._simulate(
@@ -1325,20 +1444,23 @@ class AnalysisService:
         their own age (62–70) with the standard reduction/delayed-credit factor;
         the lower earner gets a spousal top-up toward 50% of the higher earner's
         FRA benefit (reduced if claimed early, payable only once the higher
-        earner has also claimed); the survivor keeps the larger of the two.
+        earner has also claimed); the survivor gets the deceased higher earner's
+        benefit, floored at 82.5% of their PIA (the widow(er)'s limit).
 
         Returns (annual $ per distribution year, summary). The summary is None
-        when there's no spouse, so the single-stream behavior is unchanged.
+        when there's no spouse, so the single-stream behavior is unchanged. A
+        spouse counts once their current and claiming ages are given, even with
+        no benefit of their own ($0): they can still collect the spousal benefit.
         """
         def _dec(x) -> Decimal:
             return Decimal(str(round(float(x), 2)))
 
         primary_on = (primary_monthly_fra > 0 and primary_claiming_age is not None
                       and retirement_age is not None and withdrawal_years > 0)
-        spouse_on = (spouse_monthly_fra > 0 and spouse_claiming_age is not None
+        spouse_on = (spouse_monthly_fra >= 0 and spouse_claiming_age is not None
                      and spouse_current_age is not None and retirement_age is not None
                      and withdrawal_years > 0)
-        if not primary_on and not spouse_on:
+        if not primary_on and not (spouse_on and spouse_monthly_fra > 0):
             return [0.0] * withdrawal_years, None
 
         def _person(monthly_fra, claiming_age, fra_age, age_at):
@@ -1399,19 +1521,41 @@ class AnalysisService:
                 own_monthly_benefit=_dec(p["own_monthly"]), spousal_monthly_benefit=_dec(tu),
                 monthly_benefit=_dec(total_monthly), annual_benefit=_dec(total_monthly * 12.0),
                 starts_plan_year=(p["start"] + 1) if p["start"] is not None else None,
+                starts_age=p["age_at"](p["start"]) if p["start"] is not None else None,
             )
 
         household = None
-        if pri and spo:
-            people = [_to_person(pri, "You", topup_target == "primary"),
-                      _to_person(spo, "Spouse", topup_target == "spouse")]
-            survivor_monthly = max(pri["own_monthly"], spo["own_monthly"])
+        if spo:
+            people = ([_to_person(pri, "You", topup_target == "primary")] if pri else []) + [
+                _to_person(spo, "Spouse", topup_target == "spouse")]
+            if pri:
+                # Survivor (higher earner dies first, survivor at their own FRA):
+                # the deceased's actual benefit, but never less than 82.5% of their
+                # PIA when they had claimed early (the widow(er)'s limit); the
+                # survivor keeps their own benefit instead if that's larger.
+                higher = pri if pri["monthly_fra"] >= spo["monthly_fra"] else spo
+                lower = spo if higher is pri else pri
+                widow_monthly = (max(higher["own_monthly"], 0.825 * higher["monthly_fra"])
+                                 if higher["factor"] < 1.0 else higher["own_monthly"])
+                survivor_monthly = max(widow_monthly, lower["own_monthly"])
+            else:
+                survivor_monthly = spo["own_monthly"]   # only the spouse has a record
             first = next((y for y in range(withdrawal_years) if ssa_per_year[y] > 0), None)
+            # Runs of equal household income, so staggered claim dates are visible
+            # (e.g. one check for two years before the second starts).
+            phases: list[SsaPhase] = []
+            for y in range(first if first is not None else withdrawal_years, withdrawal_years):
+                if phases and float(phases[-1].annual_benefit) == round(ssa_per_year[y], 2):
+                    phases[-1].to_plan_year = y + 1
+                else:
+                    phases.append(SsaPhase(from_plan_year=y + 1, to_plan_year=y + 1,
+                                           annual_benefit=_dec(ssa_per_year[y])))
             household = SsaHousehold(
                 people=people,
                 combined_annual_benefit=_dec(max(ssa_per_year) if withdrawal_years else 0.0),
                 survivor_annual_benefit=_dec(survivor_monthly * 12.0),
                 first_benefit_plan_year=(first + 1) if first is not None else None,
+                phases=phases,
             )
         return ssa_per_year, household
 
@@ -1430,7 +1574,7 @@ class AnalysisService:
         num_simulations: int,
         retirement_age: int | None,
         ssa_claiming_age: int | None,
-    ) -> "tuple[np.ndarray, IncomeBridge]":
+    ) -> "tuple[np.ndarray, IncomeBridge, np.ndarray]":
         """Distribution phase with account-type buckets and ordered, taxed
         withdrawals — taxable → traditional → Roth.
 
@@ -1443,9 +1587,9 @@ class AnalysisService:
         that year and the portfolio is at ruin.
 
         Returns the per-year total-portfolio values (same shape the single-pooled
-        path produces, so the fan chart and summary stats are unchanged) plus an
+        path produces, so the fan chart and summary stats are unchanged), an
         IncomeBridge summary of medians answering "which accounts fund the
-        pre-SSA years".
+        pre-SSA years", and each simulation's total net (after-tax) draw.
         """
         def _d(x) -> Decimal:
             return Decimal(str(round(float(x), 2)))
@@ -1470,6 +1614,8 @@ class AnalysisService:
 
         dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
         taxes_per_sim = np.zeros(num_simulations, dtype=float)
+        net_drawn_per_sim = np.zeros(num_simulations, dtype=float)
+        gross_by_year = np.zeros((num_simulations, withdrawal_years), dtype=float)
         funding_by_year: list[BridgeYearFunding] = []
         depletes_year: dict[str, int | None] = {b: None for b in order}
 
@@ -1490,18 +1636,25 @@ class AnalysisService:
                 buckets[b] = buckets[b] - gross_taken
                 taxes_per_sim += gross_taken - net_delivered
                 need = need - net_delivered
+                net_drawn_per_sim += net_delivered
                 gross_by_src[b] = gross_taken
 
             dist_values[:, y] = buckets["taxable"] + buckets["traditional"] + buckets["roth"]
 
+            # Per-bucket medians taken separately don't add up when simulations
+            # draw from different buckets in the same year, so report the split
+            # of the simulation whose total gross draw is the median.
+            total_y = gross_by_src["taxable"] + gross_by_src["traditional"] + gross_by_src["roth"]
+            gross_by_year[:, y] = total_y
+            mid = int(np.argsort(total_y)[num_simulations // 2])
             age = (retirement_age + y) if retirement_age is not None else None
             funding_by_year.append(BridgeYearFunding(
                 year=y + 1,
                 age=age,
                 ssa=_d(ssa_per_year[y]),
-                taxable=_d(np.median(gross_by_src["taxable"])),
-                traditional=_d(np.median(gross_by_src["traditional"])),
-                roth=_d(np.median(gross_by_src["roth"])),
+                taxable=_d(gross_by_src["taxable"][mid]),
+                traditional=_d(gross_by_src["traditional"][mid]),
+                roth=_d(gross_by_src["roth"][mid]),
             ))
             for b in order:
                 if depletes_year[b] is None and props[b] > 0 and float(np.median(buckets[b])) <= 0.0:
@@ -1519,12 +1672,10 @@ class AnalysisService:
             annual_wdraw * smile_mults[0] - ssa_per_year[0], 0.0)))
             if withdrawal_years else 0.0)
 
-        # Total gross capital to fund the pre-SSA window = sum of median gross
-        # draws (all sources) across the bridge years.
-        bridge_number = sum(
-            float(r.taxable) + float(r.traditional) + float(r.roth)
-            for r in funding_by_year[:bridge_years]
-        )
+        # Total gross capital to fund the pre-SSA window = median across
+        # simulations of each one's gross draws over the bridge years.
+        bridge_number = (float(np.median(gross_by_year[:, :bridge_years].sum(axis=1)))
+                         if bridge_years > 0 else 0.0)
         bridge_coverage = (float(np.mean(dist_values[:, bridge_years - 1] > 0) * 100.0)
                            if bridge_years > 0 else 100.0)
 
@@ -1554,7 +1705,7 @@ class AnalysisService:
             taxes_total_median=_d(np.median(taxes_per_sim)),
             funding_by_year=funding_by_year,
         )
-        return dist_values, bridge
+        return dist_values, bridge, net_drawn_per_sim
 
     def _simulate(
         self,
@@ -1609,43 +1760,25 @@ class AnalysisService:
         A portfolio reaching 0 stays at 0 ("ruin" event).  The survival rate
         is the fraction of simulations that end the distribution phase > 0.
         """
-        # Build per-asset-class return/volatility vectors
-        ac_weights = []
-        ac_returns = []
-        ac_vols = []
+        # Portfolio expected (simple) annual return and correlation-aware volatility.
+        port_mu, port_sigma = portfolio_return_and_vol(allocation)
 
-        for ac, weight in allocation.items():
-            if weight <= 0:
-                continue
-            assumptions = ASSET_CLASS_ASSUMPTIONS.get(ac, ASSET_CLASS_ASSUMPTIONS["other"])
-            ac_weights.append(weight)
-            ac_returns.append(assumptions["return"])
-            ac_vols.append(assumptions["volatility"])
+        def _log_drift(mu_simple: float, sig: float) -> float:
+            # Log-normal annual growth whose mean is 1 + mu_simple:
+            # E[exp(N(m, σ²))] = exp(m + σ²/2) = 1 + mu  ⇒  m = ln(1 + mu) − σ²/2.
+            return float(np.log1p(mu_simple)) - 0.5 * sig ** 2
 
-        if not ac_weights:
-            ac_weights = [1.0]
-            ac_returns = [0.04]
-            ac_vols = [0.05]
-
-        w = np.array(ac_weights)
-        w = w / w.sum()  # normalize
-        mu = np.array(ac_returns)
-        sigma = np.array(ac_vols)
-
-        # Portfolio expected return and volatility (simplified: uncorrelated assumption)
-        port_mu = float(w @ mu)
-        port_sigma = float(np.sqrt((w ** 2) @ (sigma ** 2)))
-
-        # Simulate: proper log-normal Geometric Brownian Motion with Ito correction.
-        # drift = mu − 0.5 σ² ensures E[S_t] = S_0 · exp(mu · t)
+        # Simulate: log-normal Geometric Brownian Motion (annual steps).
         rng = np.random.default_rng(seed=42)
-        drift = port_mu - 0.5 * (port_sigma ** 2)
+        drift = _log_drift(port_mu, port_sigma)
         # Shape: (num_simulations, years)
         log_returns = rng.normal(drift, port_sigma, size=(num_simulations, years))
 
         # ── Regime conditioning — override first 2 years ──────────────────────
         # Blend schedule: year 0 = 100 % regime, year 1 = 50 %, year 2+ = base
         regime_context = "Base"
+        regime_adj: dict[str, float] | None = None
+        blend_schedule = [1.0, 0.5]  # regime weight in sim years 1 and 2, then base
         if regime is not None:
             regime_context = regime.current_regime
             REGIME_ADJ = {
@@ -1654,13 +1787,13 @@ class AnalysisService:
                 "Bear":     {"mu_delta": -0.03, "sigma_factor": 1.20},
             }
             adj = REGIME_ADJ.get(regime.current_regime, {"mu_delta": 0.0, "sigma_factor": 1.0})
-            blend_schedule = [1.0, 0.5]  # only override years 0 and 1
+            regime_adj = adj
             for y, blend in enumerate(blend_schedule[:years]):
                 if blend == 0:
                     continue
                 adj_mu     = port_mu + blend * adj["mu_delta"]
                 adj_sigma  = port_sigma * (1.0 + blend * (adj["sigma_factor"] - 1.0))
-                adj_drift  = adj_mu - 0.5 * adj_sigma ** 2
+                adj_drift  = _log_drift(adj_mu, adj_sigma)
                 log_returns[:, y] = rng.normal(adj_drift, adj_sigma, num_simulations)
 
         # ── Compound log-returns → portfolio values ───────────────────────────
@@ -1721,21 +1854,23 @@ class AnalysisService:
         income_bridge_out: IncomeBridge | None = None
 
         if withdrawal_rate > 0 and withdrawal_years > 0:
-            # Per-simulation annual withdrawal: constant dollar amount based on
-            # each simulation's own ending accumulation value (Go-Go rate).
-            annual_wdraw = final_vals * (withdrawal_rate / 100.0)  # shape: (num_sims,)
+            # One Go-Go spending amount for every simulation: the rate applied to
+            # the MEDIAN retirement balance. (Scaling each path's spending to its
+            # own balance hid all accumulation risk: a bad market just lowered
+            # spending instead of threatening survival.)
+            annual_wdraw = np.full(num_simulations,
+                                   float(np.median(final_vals)) * (withdrawal_rate / 100.0))
 
             # ── Spending Smile: build per-year multipliers ────────────────────
-            # Split distribution years into thirds: Go-Go (1.0×) → Slow-Go → No-Go
+            # Split distribution years into thirds: Go-Go (1.0×) → Slow-Go → No-Go.
+            # Any remainder goes to Go-Go then Slow-Go (10 yrs → 4/3/3, 4 → 2/1/1).
             import math as _math
             smile_mults = np.ones(withdrawal_years)
             go_go_yrs = slow_go_yrs = 0
             if spending_pattern == "smile" and withdrawal_years > 0:
                 go_go_yrs   = _math.ceil(withdrawal_years / 3)
-                slow_go_yrs = _math.ceil(withdrawal_years / 3)
-                # Guard: go-go + slow-go must not consume all years
-                if go_go_yrs + slow_go_yrs >= withdrawal_years:
-                    slow_go_yrs = max(0, withdrawal_years - go_go_yrs)
+                no_go_yrs   = withdrawal_years // 3
+                slow_go_yrs = withdrawal_years - go_go_yrs - no_go_yrs
                 for y in range(withdrawal_years):
                     if y < go_go_yrs:
                         smile_mults[y] = 1.0
@@ -1744,11 +1879,21 @@ class AnalysisService:
                     else:
                         smile_mults[y] = smile_no_pct / 100.0
 
-            # Fresh base-case growth factors for the distribution phase
-            # (no regime conditioning — we're past the 2-year regime window)
-            dist_drift = port_mu - 0.5 * (port_sigma ** 2)
-            dist_log_rets = rng.normal(dist_drift, port_sigma,
+            # Fresh base-case growth factors for the distribution phase. The
+            # regime window is the first 2 years of the whole simulation, so a
+            # short (or no) accumulation phase carries it into retirement.
+            dist_log_rets = rng.normal(_log_drift(port_mu, port_sigma), port_sigma,
                                        size=(num_simulations, withdrawal_years))
+            if regime_adj is not None:
+                for y in range(withdrawal_years):
+                    t = years + y
+                    if t >= len(blend_schedule):
+                        break
+                    blend = blend_schedule[t]
+                    adj_sigma = port_sigma * (1.0 + blend * (regime_adj["sigma_factor"] - 1.0))
+                    dist_log_rets[:, y] = rng.normal(
+                        _log_drift(port_mu + blend * regime_adj["mu_delta"], adj_sigma),
+                        adj_sigma, num_simulations)
             dist_gf = np.exp(dist_log_rets)
 
             # ── Social Security income offset ──────────────────────────────────
@@ -1782,7 +1927,7 @@ class AnalysisService:
                 # with a simple effective-tax gross-up. Answers "which accounts
                 # fund the pre-SSA years". Treats the smile-adjusted withdrawal as
                 # the household's *after-tax* spending need.
-                dist_values, income_bridge_out = self._run_income_bridge(
+                dist_values, income_bridge_out, drawn_per_sim = self._run_income_bridge(
                     final_vals=final_vals,
                     annual_wdraw=annual_wdraw,
                     smile_mults=smile_mults,
@@ -1799,12 +1944,15 @@ class AnalysisService:
             else:
                 port_d = final_vals.copy()
                 dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
+                drawn_per_sim = np.zeros(num_simulations)
                 for y in range(withdrawal_years):
                     # End-of-year: portfolio grows first; the smile-adjusted spending
                     # need is met from SSA first, then the portfolio covers the rest.
                     spending_need  = annual_wdraw * smile_mults[y]                  # per-sim ($)
                     portfolio_draw = np.maximum(spending_need - ssa_per_year[y], 0.0)
-                    port_d = np.maximum(port_d * dist_gf[:, y] - portfolio_draw, 0.0)
+                    grown = port_d * dist_gf[:, y]
+                    drawn_per_sim += np.minimum(grown, portfolio_draw)              # what was actually paid
+                    port_d = np.maximum(grown - portfolio_draw, 0.0)
                     dist_values[:, y] = port_d
 
             # First point: retirement starting value = end of accumulation.
@@ -1835,9 +1983,9 @@ class AnalysisService:
             final_d   = dist_values[:, -1]
             survival  = float(np.mean(final_d > 0) * 100)
 
-            # Total withdrawn = Go-Go rate × sum of smile multipliers
-            # (accounts for step-downs in Slow-Go and No-Go phases)
-            total_distributed = med_wdraw * float(np.sum(smile_mults))
+            # Total actually drawn from the portfolio (median across sims): net of
+            # the spending Social Security covered, and stopping at depletion.
+            total_distributed = float(np.median(drawn_per_sim))
 
             # ── Social Security summary (deterministic across sims) ────────────
             # Derived from the per-year array so one or two earners are handled
@@ -1905,35 +2053,28 @@ class AnalysisService:
 
     def get_correlation_matrix(self, lookback_days: int = 252) -> CorrelationMatrix:
         """
-        Compute pairwise Pearson correlation of daily log-returns for all
-        holdings that have price history.  Private / illiquid positions without
-        sufficient history are excluded so the matrix remains clean.
+        Pairwise Pearson correlation of simple daily returns, aligned by date,
+        for holdings with price history over the lookback (trading days).
+        Private / illiquid positions without sufficient history are excluded.
         """
+        import math
+
         summary = self.portfolio_svc.get_summary()
         end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_days)
+        start_date = end_date - timedelta(days=math.ceil(lookback_days * 365 / 252))
 
-        symbols = [h.symbol for h in summary.holdings if h.symbol]
-        bulk = self._bulk_daily_returns(symbols, start_date, end_date)
-
-        # Keep only symbols with enough data
-        good: list[tuple[str, np.ndarray]] = [
-            (sym, ret) for sym, ret in bulk.items()
-            if ret is not None and len(ret) >= 30
-        ]
-        if len(good) < 2:
+        symbols = sorted({h.symbol for h in summary.holdings if h.symbol})
+        rets = self._aligned_returns(self._bulk_price_series(symbols, start_date, end_date))
+        if len(rets) < 30 or rets.shape[1] < 2:
             return CorrelationMatrix(
-                symbols=[s for s, _ in good],
+                symbols=list(rets.columns) if len(rets) >= 30 else [],
                 matrix=[],
                 lookback_days=lookback_days,
                 as_of=end_date,
             )
 
-        good.sort(key=lambda x: x[0])
-        symbol_list = [s for s, _ in good]
-        min_len = min(len(r) for _, r in good)
-        mat = np.column_stack([r[-min_len:] for _, r in good])
-        corr = np.corrcoef(mat.T)
+        symbol_list = sorted(rets.columns)
+        corr = rets[symbol_list].corr().values
 
         matrix_out = [
             [Decimal(str(round(float(corr[i, j]), 4))) for j in range(len(symbol_list))]
@@ -1950,15 +2091,17 @@ class AnalysisService:
 
     def get_return_metrics(self) -> ReturnMetrics:
         """
-        Compute Time-Weighted Return (TWR) and approximate Money-Weighted Return
-        (XIRR / IRR) for the whole portfolio over multiple trailing windows.
+        Trailing returns of the CURRENT holdings (a backtest, not a true
+        time-weighted return: the app has no record of past portfolio values or
+        external cash flows to chain-link).
 
-        TWR methodology: chain-link sub-period returns between cash-flow dates
-        using daily portfolio values derived from stored price history.
-
-        For portfolios without dense price history, we fall back to computing
-        geometric cumulative returns from the daily portfolio return series used
-        by the risk engine.
+        Each window values today's positions buy-and-hold from the window start
+        (price on or before that date) to the latest price. Cash and other
+        stable-value positions count at 0% return. A position without price
+        history back to the window start is left out of that window and the
+        rest are re-weighted; ``history_coverage_pct`` reports how much of the
+        portfolio the 1-year figure covers. Returns are annualised only for
+        windows of at least one year.
         """
         summary = self.portfolio_svc.get_summary()
         total_mv = float(summary.total_market_value)
@@ -1966,60 +2109,73 @@ class AnalysisService:
             return ReturnMetrics()
 
         end_date = date.today()
-        windows = {
-            "1yr": 252,
-            "3yr": 756,
-            "5yr": 1260,
-        }
-
-        # Fetch bulk returns
-        symbols = [h.symbol for h in summary.holdings if h.symbol]
-        all_returns = self._bulk_daily_returns(symbols, end_date - timedelta(days=1300), end_date)
-
-        weights: list[float] = []
-        return_series: list[np.ndarray] = []
+        positions: dict[str, float] = {}
+        flat_mv = 0.0
+        uncovered_mv = 0.0
         for h in summary.holdings:
-            w = float(h.market_value) / total_mv
-            rets = all_returns.get(h.symbol) if h.symbol else None
-            if rets is not None and len(rets) >= 30:
-                weights.append(w)
-                return_series.append(rets)
+            mv = float(h.market_value)
+            sym = h.symbol.upper() if h.symbol else None
+            if sym and sym in STABLE_VALUE_SYMBOLS:
+                flat_mv += mv
+            elif h.symbol:
+                positions[h.symbol] = positions.get(h.symbol, 0.0) + mv
+            else:
+                uncovered_mv += mv
 
-        if not return_series:
-            return ReturnMetrics()
+        prices = self._bulk_price_series(sorted(positions), end_date - timedelta(days=5 * 366 + 10),
+                                         end_date, min_coverage=0.0)
+        slack = timedelta(days=7)
 
-        min_len = min(len(r) for r in return_series)
-        aligned = np.column_stack([r[-min_len:] for r in return_series])
-        w_arr = np.array(weights)
-        w_arr = w_arr / w_arr.sum()
-        port_daily = aligned @ w_arr  # daily portfolio returns
-
-        def _twr(n_days: int) -> Decimal | None:
-            if len(port_daily) < n_days:
+        def _window(start: date) -> tuple[float, float] | None:
+            """(cumulative return, weight covered) from ``start`` to today."""
+            start_val = end_val = flat_mv
+            for sym, mv in positions.items():
+                ser = prices.get(sym)
+                if ser is None or ser.index[0] > start + slack:
+                    continue
+                p0 = float(ser[ser.index <= start].iloc[-1]) if (ser.index <= start).any() else float(ser.iloc[0])
+                p1 = float(ser.iloc[-1])
+                if p0 <= 0:
+                    continue
+                end_val += mv
+                start_val += mv * p0 / p1
+            if end_val <= flat_mv or start_val <= 0:
                 return None
-            sub = port_daily[-n_days:]
-            # Chain-link: product of (1 + r_t) minus 1, annualised
-            cumulative = float(np.prod(1 + sub)) - 1
-            years = n_days / 252
-            annualised = (1 + cumulative) ** (1 / years) - 1
-            return Decimal(str(round(annualised * 100, 2)))
+            return end_val / start_val - 1, end_val / total_mv
 
-        inception_twr = None
-        if len(port_daily) > 0:
-            cumulative_all = float(np.prod(1 + port_daily)) - 1
-            years_all = len(port_daily) / 252
-            if years_all > 0:
-                inception_ann = (1 + cumulative_all) ** (1 / years_all) - 1
-                inception_twr = Decimal(str(round(inception_ann * 100, 2)))
+        def _ann(cum: float, years: float) -> Decimal:
+            r = (1 + cum) ** (1 / years) - 1 if years >= 1 else cum
+            return Decimal(str(round(r * 100, 2)))
 
-        inception_date = end_date - timedelta(days=len(port_daily))
+        out: dict[str, Decimal | None] = {}
+        coverage = None
+        for key, yrs in (("twr_1yr", 1), ("twr_3yr", 3), ("twr_5yr", 5)):
+            res = _window(end_date - timedelta(days=round(365.25 * yrs)))
+            out[key] = _ann(res[0], yrs) if res else None
+            if key == "twr_1yr" and res:
+                coverage = Decimal(str(round(res[1] * 100, 1)))
+
+        # "Since": the earliest date by which positions making up ≥90% of the
+        # priced portfolio have history.
+        inception = since = None
+        starts = sorted((prices[sym].index[0], mv) for sym, mv in positions.items() if sym in prices)
+        if starts:
+            need = 0.9 * (sum(positions.values()) + flat_mv) - flat_mv
+            acc = 0.0
+            for d, mv in starts:
+                acc += mv
+                if acc >= need:
+                    since = d
+                    break
+            since = since or starts[-1][0]
+            res = _window(since)
+            if res:
+                inception = _ann(res[0], (end_date - since).days / 365.25)
 
         return ReturnMetrics(
-            twr_1yr=_twr(252),
-            twr_3yr=_twr(756),
-            twr_5yr=_twr(1260),
-            twr_inception=inception_twr,
-            annualized_since=inception_date,
+            twr_1yr=out["twr_1yr"], twr_3yr=out["twr_3yr"], twr_5yr=out["twr_5yr"],
+            twr_inception=inception, annualized_since=since,
+            history_coverage_pct=coverage,
         )
 
     def get_period_returns(self) -> list[dict]:

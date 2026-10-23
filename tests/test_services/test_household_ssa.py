@@ -172,3 +172,34 @@ def test_max_spending_uses_household_ssa():
                                     spouse_claiming_age=62, spouse_current_age=54)
     assert single.ssa_annual_benefit == Decimal("34440.00")
     assert couple.ssa_annual_benefit == Decimal("51570.00")
+
+
+def test_staggered_starts_follow_each_spouses_age():
+    svc = _svc_no_db()
+    # You 54, spouse 52, retire at 58 (4-yr accumulation), both claim at 62:
+    # your check starts plan yr 5 (age 62), the spouse's in plan yr 7, when they reach 62.
+    sched, hh = svc._household_ssa(
+        withdrawal_years=12, accumulation_years=4, retirement_age=58,
+        primary_monthly_fra=4100, primary_claiming_age=62,
+        spouse_monthly_fra=1900, spouse_claiming_age=62, spouse_current_age=52,
+    )
+    assert sched[:4] == [0.0] * 4
+    assert sched[4] == sched[5] == 34440.0                       # your check only
+    assert sched[6] == 51570.0                                   # both, incl. 97.50 spousal
+    you, spouse = hh.people
+    assert (you.starts_plan_year, you.starts_age) == (5, 62)
+    assert (spouse.starts_plan_year, spouse.starts_age) == (7, 62)
+    assert [(p.from_plan_year, p.to_plan_year, p.annual_benefit) for p in hh.phases] == [
+        (5, 6, Decimal("34440.00")), (7, 12, Decimal("51570.00"))]
+
+
+def test_survivor_gets_widow_limit_when_higher_earner_claimed_early():
+    svc = _svc_no_db()
+    # Higher earner claimed at 62 (70% → 2,870), but the survivor's benefit is
+    # floored at 82.5% of the deceased's PIA: 0.825 × 4,100 = 3,382.50/mo.
+    _, hh = svc._household_ssa(
+        withdrawal_years=20, accumulation_years=4, retirement_age=58,
+        primary_monthly_fra=4100, primary_claiming_age=62,
+        spouse_monthly_fra=1900, spouse_claiming_age=62, spouse_current_age=52,
+    )
+    assert hh.survivor_annual_benefit == Decimal("40590.00")

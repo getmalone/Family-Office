@@ -67,6 +67,7 @@ class RiskMetrics(BaseModel):
     position_risks: list[PositionRisk]
     concentration: ConcentrationRisk
     asset_class_risks: list[AssetClassRisk]
+    history_coverage_pct: Decimal | None = None  # % of portfolio weight with price history
 
 
 # --- Markov Regime Detection ---
@@ -113,7 +114,8 @@ class ReturnMetrics(BaseModel):
     twr_5yr: Decimal | None = None
     twr_inception: Decimal | None = None
     mwr_1yr: Decimal | None = None   # 1-year money-weighted return (XIRR) %
-    annualized_since: date | None = None  # earliest data date used for inception TWR
+    annualized_since: date | None = None  # start of the "since" window (annualised only if ≥ 1 yr)
+    history_coverage_pct: Decimal | None = None  # % of the portfolio covered by the 1-yr figure
 
 
 # --- Investment Profiles ---
@@ -282,25 +284,36 @@ class SsaPerson(BaseModel):
     monthly_benefit: Decimal                         # total monthly once flowing (own + spousal top-up)
     annual_benefit: Decimal
     starts_plan_year: int | None = None              # distribution-year index their benefit starts (None = before retirement)
+    starts_age: int | None = None                    # this person's own age when their benefit starts
+
+
+class SsaPhase(BaseModel):
+    """A run of plan years with the same household Social Security income."""
+    from_plan_year: int                              # first plan year (1-based)
+    to_plan_year: int                                # last plan year (inclusive)
+    annual_benefit: Decimal                          # household SSA $/yr during this run
 
 
 class SsaHousehold(BaseModel):
     """Two-earner Social Security with spousal and survivor benefits."""
     people: list[SsaPerson] = []
     combined_annual_benefit: Decimal = Decimal("0")  # household total once both streams are flowing
-    survivor_annual_benefit: Decimal = Decimal("0")  # what the survivor keeps (the larger single benefit)
+    survivor_annual_benefit: Decimal = Decimal("0")  # survivor's benefit if the higher earner dies first (survivor at FRA)
     first_benefit_plan_year: int | None = None       # distribution-year index the first SSA dollar arrives
+    phases: list[SsaPhase] = []                      # household SSA by plan-year run (shows staggered starts)
 
 
 class MaxSpendingResult(BaseModel):
     """Highest sustainable spending for a target portfolio survival rate."""
     target_survival: Decimal                 # e.g. 85 (%)
-    max_withdrawal_rate: Decimal             # % of retirement-date portfolio
-    annual_amount: Decimal                   # median Go-Go annual spend at that rate
+    max_withdrawal_rate: Decimal             # % of the median retirement-date portfolio
+    annual_amount: Decimal                   # Go-Go annual spending at that rate (SSA included)
     monthly_amount: Decimal
     achieved_survival: Decimal               # survival at the solved rate (≈ target)
-    ssa_annual_benefit: Decimal | None = None
+    ssa_annual_benefit: Decimal | None = None  # household SSA once every check has started
     withdrawal_years: int = 0
+    target_reachable: bool = True            # False → even ~0% spending misses the target
+    income_bridge: bool = False              # solved with account sequencing + taxes
 
 
 class MonteCarloComparison(BaseModel):

@@ -23,10 +23,12 @@ from app.schemas.tax import ElectionSimResult, HarvestCandidate, TaxSummary
 from app.services.market_data import MarketDataService
 
 
-# Approximate 2026 federal tax rates
+# Approximate 2026 federal tax rates (top bracket)
 SHORT_TERM_RATE = Decimal("0.37")
 LONG_TERM_RATE = Decimal("0.20")
-NIIT_RATE = Decimal("0.038")  # Net Investment Income Tax
+NIIT_RATE = Decimal("0.038")  # Net Investment Income Tax — applies to ST and LT gains, dividends, interest
+CAPITAL_LOSS_LIMIT = Decimal("3000")  # IRC §1211(b): net capital loss usable against ordinary income
+BASIS_SIM_FRACTION = Decimal("0.25")  # cost-basis comparison sells this share of each position
 
 
 class TaxService:
@@ -83,27 +85,29 @@ class TaxService:
                 continue
 
             total_loss = Decimal("0")
+            tax_savings = Decimal("0")
             oldest_date = date.today()
             any_short_term = False
+            loss_lot_ids: set[int] = set()
 
             for lot in lot_group:
                 unrealized = (current_price - lot.cost_basis_per_unit) * lot.remaining_quantity
-                if unrealized < 0:
-                    total_loss += unrealized
                 if lot.acquisition_date < oldest_date:
                     oldest_date = lot.acquisition_date
-                if not lot.is_long_term:
-                    any_short_term = True
+                if unrealized < 0:
+                    # Each loss lot saves tax at its own character's rate.
+                    total_loss += unrealized
+                    loss_lot_ids.add(lot.id)
+                    short = not lot.is_long_term
+                    any_short_term = any_short_term or short
+                    rate = SHORT_TERM_RATE if short else LONG_TERM_RATE
+                    tax_savings += abs(unrealized) * (rate + NIIT_RATE)
 
             if total_loss >= -min_loss:
                 continue  # Loss too small
 
             # Check wash-sale risk
-            wash_risk = self._has_recent_purchase(asset_id, acct_id, days=30)
-
-            # Estimate tax savings
-            rate = SHORT_TERM_RATE if any_short_term else LONG_TERM_RATE
-            tax_savings = abs(total_loss) * (rate + NIIT_RATE)
+            wash_risk = self._has_recent_purchase(asset_id, exclude_lot_ids=loss_lot_ids)
 
             candidates.append(
                 HarvestCandidate(
@@ -134,44 +138,51 @@ class TaxService:
         year_start = date(year, 1, 1)
         year_end = date(year, 12, 31)
 
-        # Realized gains/losses from disposals
-        disposals = (
+        # Realized gains/losses from disposals in TAXABLE accounts only (soft-
+        # deleted accounts still count — realized history stays). A wash-sale
+        # loss is deferred into the replacement lot, so add the disallowed part
+        # back; it is recognised later when the replacement is sold.
+        rows = (
             self.session.query(TaxLotDisposal)
+            .join(TaxLot, TaxLotDisposal.tax_lot_id == TaxLot.id)
+            .join(Account, TaxLot.account_id == Account.id)
             .filter(
+                Account.is_taxable == True,
                 TaxLotDisposal.disposal_date >= year_start,
                 TaxLotDisposal.disposal_date <= year_end,
             )
             .all()
         )
+        recognised = [
+            (d.is_short_term, d.realized_gain_loss + (d.wash_sale_disallowed or Decimal("0")))
+            for d in rows
+        ]
+        wash_disallowed = sum((d.wash_sale_disallowed or Decimal("0") for d in rows), Decimal("0"))
 
-        st_gains = sum(d.realized_gain_loss for d in disposals if d.is_short_term and d.realized_gain_loss > 0)
-        st_losses = sum(d.realized_gain_loss for d in disposals if d.is_short_term and d.realized_gain_loss < 0)
-        lt_gains = sum(d.realized_gain_loss for d in disposals if not d.is_short_term and d.realized_gain_loss > 0)
-        lt_losses = sum(d.realized_gain_loss for d in disposals if not d.is_short_term and d.realized_gain_loss < 0)
+        st_gains = sum((g for st, g in recognised if st and g > 0), Decimal("0"))
+        st_losses = sum((g for st, g in recognised if st and g < 0), Decimal("0"))
+        lt_gains = sum((g for st, g in recognised if not st and g > 0), Decimal("0"))
+        lt_losses = sum((g for st, g in recognised if not st and g < 0), Decimal("0"))
 
-        # Dividend and interest income
-        divs = (
-            self.session.query(func.coalesce(func.sum(Transaction.total_amount), 0))
-            .filter(
-                Transaction.transaction_type == TransactionTypeEnum.DIVIDEND,
-                Transaction.transaction_date >= year_start,
-                Transaction.transaction_date <= year_end,
+        def _income(txn_type) -> Decimal:
+            total = (
+                self.session.query(func.coalesce(func.sum(Transaction.total_amount), 0))
+                .join(Account, Transaction.account_id == Account.id)
+                .filter(
+                    Account.is_taxable == True,
+                    Transaction.transaction_type == txn_type,
+                    Transaction.transaction_date >= year_start,
+                    Transaction.transaction_date <= year_end,
+                )
+                .scalar()
             )
-            .scalar()
-        ) or Decimal("0")
+            return Decimal(str(total or 0))
 
-        interest = (
-            self.session.query(func.coalesce(func.sum(Transaction.total_amount), 0))
-            .filter(
-                Transaction.transaction_type == TransactionTypeEnum.INTEREST,
-                Transaction.transaction_date >= year_start,
-                Transaction.transaction_date <= year_end,
-            )
-            .scalar()
-        ) or Decimal("0")
+        divs = _income(TransactionTypeEnum.DIVIDEND)
+        interest = _income(TransactionTypeEnum.INTEREST)
 
         # Deductible expenses
-        expenses = (
+        expenses = Decimal(str((
             self.session.query(func.coalesce(func.sum(Expense.amount), 0))
             .join(ExpenseCategory, Expense.category_id == ExpenseCategory.id)
             .filter(
@@ -180,27 +191,43 @@ class TaxService:
                 Expense.expense_date <= year_end,
             )
             .scalar()
-        ) or Decimal("0")
+        ) or 0))
 
-        net = st_gains + st_losses + lt_gains + lt_losses
-
-        # Split taxable income by rate bucket:
-        # Short-term gains + interest income → ordinary rates (37%)
-        # Long-term gains + qualified dividends → preferential rates (20% + 3.8% NIIT)
+        # ── Capital gain netting (Schedule D) ─────────────────────────────────
+        # Net within each holding period, then a net loss in one offsets a net
+        # gain in the other. A remaining net loss offsets up to $3,000 of
+        # ordinary income; the rest carries forward.
         st_net = st_gains + st_losses
         lt_net = lt_gains + lt_losses
-        st_taxable = st_net + Decimal(str(interest))
-        lt_taxable = lt_net + Decimal(str(divs))
+        if st_net < 0 < lt_net:
+            lt_net, st_net = max(Decimal("0"), lt_net + st_net), min(Decimal("0"), st_net + lt_net)
+        elif lt_net < 0 < st_net:
+            st_net, lt_net = max(Decimal("0"), st_net + lt_net), min(Decimal("0"), lt_net + st_net)
+        net = st_gains + st_losses + lt_gains + lt_losses
+        net_loss = -min(Decimal("0"), st_net + lt_net) if (st_net <= 0 and lt_net <= 0) else Decimal("0")
+        loss_deduction = min(net_loss, CAPITAL_LOSS_LIMIT)
+        carryforward = net_loss - loss_deduction
 
-        # Apply deductible expenses to the highest-rate bucket first (maximises tax savings)
-        remaining_expenses = Decimal(str(expenses))
-        st_after_exp = max(Decimal("0"), st_taxable - remaining_expenses)
-        remaining_expenses = max(Decimal("0"), remaining_expenses - st_taxable)
-        lt_after_exp = max(Decimal("0"), lt_taxable - remaining_expenses)
+        # Ordinary-rate income: net ST gain + interest, less deductible expenses
+        # and the capital-loss deduction. Preferential: net LT gain + qualified
+        # dividends. NIIT applies to all net investment income.
+        ordinary = max(Decimal("0"), st_net) + interest
+        preferential = max(Decimal("0"), lt_net) + divs
+        # Expenses offset the highest-rate (ordinary) bucket first.
+        ordinary_after = max(Decimal("0"), ordinary - expenses)
+        preferential_after = max(Decimal("0"), preferential - max(Decimal("0"), expenses - ordinary))
+        # The capital-loss deduction offsets ordinary income only; any part not
+        # used here offsets ordinary income from outside the app (wages etc.).
+        loss_here = min(loss_deduction, ordinary_after)
+        ordinary_after -= loss_here
+        loss_outside = loss_deduction - loss_here
 
-        st_tax = max(Decimal("0"), st_after_exp * SHORT_TERM_RATE)
-        lt_tax = max(Decimal("0"), lt_after_exp * (LONG_TERM_RATE + NIIT_RATE))
-        estimated_tax = st_tax + lt_tax
+        estimated_tax = max(
+            Decimal("0"),
+            ordinary_after * (SHORT_TERM_RATE + NIIT_RATE)
+            + preferential_after * (LONG_TERM_RATE + NIIT_RATE)
+            - loss_outside * SHORT_TERM_RATE,
+        )
 
         return TaxSummary(
             tax_year=year,
@@ -209,14 +236,14 @@ class TaxService:
             long_term_gains=lt_gains,
             long_term_losses=lt_losses,
             net_gain_loss=net,
-            dividends_qualified=Decimal(str(divs)),
+            dividends_qualified=divs,
             dividends_ordinary=Decimal("0"),
-            interest_income=Decimal(str(interest)),
-            deductible_expenses=Decimal(str(expenses)),
-            estimated_tax_liability=estimated_tax,
-            # IRC §1211(b): individuals may deduct up to $3,000 of net capital losses
-            # against ordinary income per year; the remainder carries forward.
-            loss_carryforward=max(Decimal("0"), abs(net) - Decimal("3000")) if net < 0 else Decimal("0"),
+            interest_income=interest,
+            deductible_expenses=expenses,
+            estimated_tax_liability=estimated_tax.quantize(Decimal("0.01")),
+            loss_carryforward=carryforward,
+            wash_sale_disallowed=wash_disallowed,
+            capital_loss_deduction=loss_deduction,
         )
 
     def simulate_election(self, election_type: str) -> list[ElectionSimResult]:
@@ -229,15 +256,19 @@ class TaxService:
         results = []
 
         if election_type == "cost_basis_method":
-            for method, name in [("fifo", "FIFO"), ("hifo", "Highest Cost First"), ("lifo", "LIFO")]:
-                impact = self._simulate_basis_method(method)
+            methods = [("fifo", "FIFO"), ("hifo", "Highest Cost First"), ("lifo", "LIFO")]
+            impacts = {m: self._simulate_basis_method(m) for m, _ in methods}
+            best = min(impacts, key=lambda m: impacts[m])
+            pct = int(BASIS_SIM_FRACTION * 100)
+            for method, name in methods:
                 results.append(
                     ElectionSimResult(
                         election_type="cost_basis_method",
                         scenario_name=name,
-                        estimated_tax_impact=impact,
-                        description=f"Using {name} method for all future disposals",
-                        recommended=(method == "hifo"),
+                        estimated_tax_impact=impacts[method],
+                        description=(f"Tax if {pct}% of every taxable position were sold today "
+                                     f"choosing lots by {name}"),
+                        recommended=(method == best),
                     )
                 )
 
@@ -259,18 +290,21 @@ class TaxService:
         return results
 
     def _simulate_basis_method(self, method: str) -> Decimal:
-        """Estimate tax impact if all open lots were sold today using the given method."""
+        """Estimated tax if BASIS_SIM_FRACTION of every taxable position were sold
+        today, choosing lots by ``method``. Each lot's gain is taxed at its own
+        short/long-term rate (+NIIT) after netting the two holding periods, so
+        the methods differ by which lots — and how much gain — they pick."""
         from app.services.holdings import open_lots_query
 
-        lots = open_lots_query(self.session).all()
+        lots = (open_lots_query(self.session)
+                .filter(Account.is_taxable == True).all())
 
-        # Group by asset
-        by_asset: dict[int, list[TaxLot]] = {}
+        by_position: dict[tuple[int, int], list[TaxLot]] = {}
         for lot in lots:
-            by_asset.setdefault(lot.asset_id, []).append(lot)
+            by_position.setdefault((lot.asset_id, lot.account_id), []).append(lot)
 
-        total_gain = Decimal("0")
-        for asset_id, asset_lots in by_asset.items():
+        st_net = lt_net = Decimal("0")
+        for (asset_id, _), pos_lots in by_position.items():
             asset = self.session.get(Asset, asset_id)
             if not asset:
                 continue
@@ -279,28 +313,43 @@ class TaxService:
                 continue
 
             if method == "fifo":
-                sorted_lots = sorted(asset_lots, key=lambda l: l.acquisition_date)
+                ordered = sorted(pos_lots, key=lambda l: (l.acquisition_date, l.id))
             elif method == "lifo":
-                sorted_lots = sorted(asset_lots, key=lambda l: l.acquisition_date, reverse=True)
+                ordered = sorted(pos_lots, key=lambda l: (l.acquisition_date, l.id), reverse=True)
             else:  # hifo
-                sorted_lots = sorted(asset_lots, key=lambda l: l.cost_basis_per_unit, reverse=True)
+                ordered = sorted(pos_lots, key=lambda l: l.cost_basis_per_unit, reverse=True)
 
-            for lot in sorted_lots:
-                gain = (price - lot.cost_basis_per_unit) * lot.remaining_quantity
-                total_gain += gain
+            to_sell = sum((l.remaining_quantity for l in pos_lots), Decimal("0")) * BASIS_SIM_FRACTION
+            for lot in ordered:
+                if to_sell <= 0:
+                    break
+                qty = min(to_sell, lot.remaining_quantity)
+                gain = (price - lot.cost_basis_per_unit) * qty
+                if lot.is_long_term:
+                    lt_net += gain
+                else:
+                    st_net += gain
+                to_sell -= qty
 
-        return total_gain * SHORT_TERM_RATE
+        if st_net < 0 < lt_net:
+            lt_net, st_net = max(Decimal("0"), lt_net + st_net), Decimal("0")
+        elif lt_net < 0 < st_net:
+            st_net, lt_net = max(Decimal("0"), st_net + lt_net), Decimal("0")
+        tax = (max(Decimal("0"), st_net) * (SHORT_TERM_RATE + NIIT_RATE)
+               + max(Decimal("0"), lt_net) * (LONG_TERM_RATE + NIIT_RATE))
+        return tax.quantize(Decimal("0.01"))
 
-    def _has_recent_purchase(self, asset_id: int, account_id: int, days: int = 30) -> bool:
-        """Check if there was a recent purchase that could trigger wash-sale rules."""
+    def _has_recent_purchase(self, asset_id: int, exclude_lot_ids: set[int] | None = None,
+                             days: int = 30) -> bool:
+        """Would selling now be a wash sale? True when shares of the asset were
+        bought in the last ``days`` days in ANY account (an IRA purchase counts)
+        and aren't among the loss lots that would be sold."""
         cutoff = date.today() - timedelta(days=days)
-        count = (
-            self.session.query(Transaction)
-            .filter(
-                Transaction.asset_id == asset_id,
-                Transaction.transaction_type == TransactionTypeEnum.BUY,
-                Transaction.transaction_date >= cutoff,
-            )
-            .count()
+        q = self.session.query(TaxLot).filter(
+            TaxLot.asset_id == asset_id,
+            TaxLot.acquisition_date >= cutoff,
+            TaxLot.remaining_quantity > 0,
         )
-        return count > 0
+        if exclude_lot_ids:
+            q = q.filter(TaxLot.id.notin_(list(exclude_lot_ids)))
+        return q.count() > 0

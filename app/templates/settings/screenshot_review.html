@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto space-y-6">
+  <div class="flex items-center justify-between">
+    <h2 class="text-2xl font-bold text-gray-900">Review screenshot import</h2>
+    <a href="/settings/#screenshots" class="text-sm text-blue-600 hover:text-blue-800">Cancel</a>
+  </div>
+
+  <p class="text-sm text-gray-600">
+    Check every row against your screenshots before importing — Claude can misread a digit.
+    Rows highlighted in amber need a look. Nothing has been saved yet.
+  </p>
+  {% if notes %}
+  <div class="rounded-lg bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 text-sm">{{ notes }}</div>
+  {% endif %}
+
+  <form method="post" action="/settings/import-screenshots/confirm" class="space-y-6">
+    {# ── Account ── #}
+    <div class="bg-white shadow rounded-lg p-6 space-y-4">
+      <h3 class="font-medium text-gray-900">Account</h3>
+      <p class="text-xs text-gray-500">
+        Read from the screenshots:
+        {{ account.institution or "institution not shown" }} ·
+        {{ account.account_name or "name not shown" }}{% if account.account_last4 %} · ending {{ account.account_last4 }}{% endif %}
+        {% if account.as_of_date %} · as of {{ account.as_of_date }}{% endif %}
+      </p>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="radio" name="target" value="existing" {% if matched_account %}checked{% endif %}
+               {% if not accounts %}disabled{% endif %}>
+        Update an existing account
+        <select name="existing_account" class="ml-2 rounded-md border px-2 py-1 text-sm">
+          {% for a in accounts %}
+          <option value="{{ a.name }}" {% if a.name == matched_account %}selected{% endif %}>{{ a.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" name="target" value="new" {% if not matched_account %}checked{% endif %}>
+          Create / update an account named
+        </label>
+        <div class="mt-2 ml-6 flex flex-wrap gap-3">
+          <input type="text" name="account_name" value="{{ default_name }}" class="rounded-md border px-3 py-1.5 text-sm w-72">
+          <select name="account_type" class="rounded-md border px-2 py-1.5 text-sm">
+            {% for t in account_types %}
+            <option value="{{ t }}" {% if t == account.account_type %}selected{% endif %}>{{ t.replace('_', ' ') }}</option>
+            {% endfor %}
+          </select>
+          <input type="text" name="institution" value="{{ account.institution or '' }}" placeholder="Institution"
+                 class="rounded-md border px-3 py-1.5 text-sm w-48">
+        </div>
+        {% if not account.account_type_known %}
+        <p class="ml-6 mt-1 text-xs text-amber-700">The account type wasn't clear from the screenshots — check it (it decides whether gains are taxable).</p>
+        {% endif %}
+      </div>
+      <p class="text-xs text-gray-500">Importing replaces this account's previously imported positions. Lots you've sold from and hand-entered trades are kept.</p>
+    </div>
+
+    {# ── Positions ── #}
+    <div class="bg-white shadow rounded-lg overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+          <tr>
+            <th class="px-3 py-2">Import</th>
+            <th class="px-3 py-2 text-left">Symbol</th>
+            <th class="px-3 py-2 text-left">Name</th>
+            <th class="px-3 py-2 text-left">Class</th>
+            <th class="px-3 py-2 text-right">Quantity</th>
+            <th class="px-3 py-2 text-right">Price</th>
+            <th class="px-3 py-2 text-right">Market value</th>
+            <th class="px-3 py-2 text-right">Cost basis</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr class="border-t {% if r.issues %}bg-amber-50{% endif %}">
+            <td class="px-3 py-2 text-center"><input type="checkbox" name="include" value="{{ loop.index0 }}" checked></td>
+            <td class="px-3 py-2"><input name="symbol" value="{{ r.symbol or '' }}" class="w-24 rounded border px-2 py-1"></td>
+            <td class="px-3 py-2">
+              <input name="name" value="{{ r.name }}" class="w-64 rounded border px-2 py-1">
+              {% for i in r.issues %}<div class="text-xs text-amber-800 mt-0.5">⚠ {{ i }}</div>{% endfor %}
+            </td>
+            <td class="px-3 py-2">
+              <select name="asset_class" class="rounded border px-1 py-1">
+                {% for c in asset_classes %}
+                <option value="{{ c }}" {% if c == r.asset_class %}selected{% endif %}>{{ c.replace('_', ' ') }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="px-3 py-2 text-right"><input name="quantity" value="{{ r.quantity if r.quantity is not none else '' }}" class="w-28 rounded border px-2 py-1 text-right"></td>
+            <td class="px-3 py-2 text-right"><input name="price" value="{{ r.price if r.price is not none else '' }}" class="w-24 rounded border px-2 py-1 text-right"></td>
+            <td class="px-3 py-2 text-right text-gray-500">{% if r.market_value is not none %}${{ "{:,.2f}".format(r.market_value) }}{% else %}—{% endif %}</td>
+            <td class="px-3 py-2 text-right"><input name="cost_basis_total" value="{{ r.cost_basis_total if r.cost_basis_total is not none else '' }}" placeholder="unknown" class="w-28 rounded border px-2 py-1 text-right"></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="px-3 py-6 text-center text-gray-500">No holdings were found in these screenshots.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-gray-500">A blank cost basis is recorded at today's price (no gain or loss) — fill it in from your statement for accurate tax figures.</p>
+
+    <div class="flex gap-3">
+      <button type="submit" class="bg-emerald-600 text-white rounded-md px-5 py-2 text-sm hover:bg-emerald-700" {% if not rows %}disabled{% endif %}>Import checked positions</button>
+      <a href="/settings/#screenshots" class="rounded-md border px-5 py-2 text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

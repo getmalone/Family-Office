@@ -22,8 +22,8 @@ Your responsibilities:
 6. Maintain the family governance dashboard
 
 Key estate planning rules:
-- 2026 annual gift exclusion: $18,000 per recipient
-- 2026 lifetime exemption: ~$13.61M per person
+- 2026 annual gift exclusion: $19,000 per recipient
+- 2026 lifetime exemption: $15M per person (P.L. 119-21; indexed from 2027)
 - GRAT: Transfer appreciation above Section 7520 hurdle rate tax-free
 - Zeroed-out GRAT: Annuity equals full value, remainder passes if growth > hurdle
 - Gift splitting: Married couples can combine annual exclusions ($36,000/recipient)
