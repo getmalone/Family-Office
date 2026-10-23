@@ -102,3 +102,18 @@ def test_upload_review_and_import(test_client, engine, monkeypatch):
     acct = s.query(Account).filter_by(name="Fidelity Individual …6789").one()
     lots = s.query(TaxLot).filter_by(account_id=acct.id).all()
     assert len(lots) == 3 and acct.is_taxable
+
+
+def test_damaged_sdk_install_gives_a_plain_message(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def broken(name, *a, **kw):
+        if name == "anthropic":
+            raise ImportError("cannot import name 'epydoc' from partially initialized module")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(si, "_api_key", lambda: "sk-test")
+    monkeypatch.setattr(builtins, "__import__", broken)
+    with pytest.raises(si.ScreenshotImportError, match="relaunch"):
+        si.extract_positions([(PNG, "image/png")])
