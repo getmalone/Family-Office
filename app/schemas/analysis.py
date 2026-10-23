@@ -67,6 +67,7 @@ class RiskMetrics(BaseModel):
     position_risks: list[PositionRisk]
     concentration: ConcentrationRisk
     asset_class_risks: list[AssetClassRisk]
+    history_coverage_pct: Decimal | None = None  # % of portfolio weight with price history
 
 
 # --- Markov Regime Detection ---
@@ -113,7 +114,8 @@ class ReturnMetrics(BaseModel):
     twr_5yr: Decimal | None = None
     twr_inception: Decimal | None = None
     mwr_1yr: Decimal | None = None   # 1-year money-weighted return (XIRR) %
-    annualized_since: date | None = None  # earliest data date used for inception TWR
+    annualized_since: date | None = None  # start of the "since" window (annualised only if ≥ 1 yr)
+    history_coverage_pct: Decimal | None = None  # % of the portfolio covered by the 1-yr figure
 
 
 # --- Investment Profiles ---

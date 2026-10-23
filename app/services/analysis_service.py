@@ -289,134 +289,155 @@ class AnalysisService:
     def get_risk_metrics(
         self, lookback_days: int = 252, risk_free_rate: float = 0.05
     ) -> RiskMetrics:
-        """Compute portfolio risk metrics from historical price data."""
+        """Compute portfolio risk metrics.
+
+        ``lookback_days`` is in trading days (252 ≈ 1 year). Returns of holdings
+        with price history are aligned by date. Volatility, Sharpe, beta and
+        risk contributions use a full annual covariance matrix: sample
+        covariance among holdings with history, and the asset-class assumptions
+        (volatility × the asset-class correlation table) for holdings without
+        it — deterministic, and contributions sum to 100%. Drawdown and VaR use
+        the dated history of covered holdings, rescaled to the whole
+        portfolio's volatility.
+        """
+        import math
+
         summary = self.portfolio_svc.get_summary()
         total_mv = float(summary.total_market_value)
         if total_mv <= 0:
             return self._empty_risk_metrics(lookback_days, risk_free_rate)
 
-        # Collect per-holding daily returns
         end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_days)
-        holdings_returns: list[tuple[dict, np.ndarray]] = []
-        weights: list[float] = []
+        start_date = end_date - timedelta(days=math.ceil(lookback_days * 365 / 252))
 
-        # Bulk-fetch all symbols at once (single yfinance call, orders of magnitude faster)
-        symbols_needed = [h.symbol for h in summary.holdings if h.symbol]
-        bulk_returns = self._bulk_daily_returns(symbols_needed + ["SPY"], start_date, end_date)
-        spy_returns = bulk_returns.get("SPY")
-
+        # One entry per security: a fund held in several accounts is one position.
+        positions: dict[int, dict] = {}
         for h in summary.holdings:
-            w = float(h.market_value) / total_mv
-            info = {
-                "asset_id": h.asset_id,
-                "symbol": h.symbol,
-                "name": h.name,
-                "asset_class": h.asset_class,
-                "weight": w,
-            }
-            rets = bulk_returns.get(h.symbol) if h.symbol else None
-            if rets is not None and len(rets) > 20:
-                holdings_returns.append((info, rets))
-                weights.append(w)
-                continue
-            # Private asset or insufficient data — use assumed vol
-            assumed = ASSET_CLASS_ASSUMPTIONS.get(h.asset_class, ASSET_CLASS_ASSUMPTIONS["other"])
-            daily_vol = assumed["volatility"] / np.sqrt(252)
-            fake_rets = np.random.normal(assumed["return"] / 252, daily_vol, lookback_days)
-            holdings_returns.append((info, fake_rets))
-            weights.append(w)
-
-        if not holdings_returns:
+            pos = positions.setdefault(h.asset_id, {
+                "asset_id": h.asset_id, "symbol": h.symbol, "name": h.name,
+                "asset_class": h.asset_class, "mv": 0.0,
+            })
+            pos["mv"] += float(h.market_value)
+        pos_list = [p for p in positions.values() if p["mv"] > 0]
+        if not pos_list:
             return self._empty_risk_metrics(lookback_days, risk_free_rate)
+        for pos in pos_list:
+            pos["weight"] = pos["mv"] / total_mv
 
-        # Align returns to common length
-        min_len = min(len(r) for _, r in holdings_returns)
-        aligned = np.column_stack([r[-min_len:] for _, r in holdings_returns])
-        w_arr = np.array(weights)
-        w_arr = w_arr / w_arr.sum()  # normalize
+        symbols = sorted({p["symbol"] for p in pos_list if p["symbol"]})
+        price_map = self._bulk_price_series(symbols + ["SPY"], start_date, end_date)
+        spy_prices = price_map.pop("SPY", None) if "SPY" not in symbols else price_map.get("SPY")
+        hist_syms = [sym for sym in symbols if sym in price_map]
+        rets = self._aligned_returns({sym: price_map[sym] for sym in hist_syms})
+        if len(rets) < 20:
+            rets = rets.iloc[0:0]
+            hist_syms = []
 
-        # Portfolio daily returns
-        port_daily = aligned @ w_arr
+        n = len(pos_list)
+        w = np.array([p["weight"] for p in pos_list])
+        sig = np.empty(n)
+        mu = np.empty(n)
+        hist_idx: dict[int, str] = {}
+        for i, pos in enumerate(pos_list):
+            assumed = ASSET_CLASS_ASSUMPTIONS.get(pos["asset_class"], ASSET_CLASS_ASSUMPTIONS["other"])
+            if pos["symbol"] in hist_syms:
+                col = rets[pos["symbol"]].values
+                hist_idx[i] = pos["symbol"]
+                sig[i] = float(np.std(col, ddof=1) * np.sqrt(252))
+                mu[i] = float(np.mean(col) * 252)
+            else:
+                sig[i] = assumed["volatility"]
+                mu[i] = assumed["return"]
 
-        # Build a trading-day date index for the aligned window so that
-        # drawdown dates are accurate (return indices ≠ calendar day offsets).
-        # We generate the sequence of trading days that yfinance would have
-        # returned for [start_date, end_date], then take the last min_len.
-        import pandas as pd
-        trading_days = pd.bdate_range(start=str(start_date), end=str(end_date))
-        # bdate_range gives open-interval dates; returns are diff of prices so
-        # there is one fewer return than price point — align to min_len.
-        if len(trading_days) > min_len:
-            trading_days = trading_days[-min_len:]
+        # Annual covariance: sample among covered holdings, assumed elsewhere.
+        cov = np.empty((n, n))
+        sample_cov = (np.cov(rets.values, rowvar=False, ddof=1) * 252
+                      if len(hist_syms) > 1 else None)
+        col_of = {sym: j for j, sym in enumerate(rets.columns)}
+        for i in range(n):
+            for j in range(n):
+                if i in hist_idx and j in hist_idx and sample_cov is not None:
+                    cov[i, j] = sample_cov[col_of[hist_idx[i]], col_of[hist_idx[j]]]
+                elif i == j:
+                    cov[i, j] = sig[i] ** 2
+                else:
+                    rho = asset_class_correlation(pos_list[i]["asset_class"], pos_list[j]["asset_class"])
+                    cov[i, j] = rho * sig[i] * sig[j]
 
-        # Annualized metrics
-        port_vol = float(np.std(port_daily) * np.sqrt(252))
-        port_mean = float(np.mean(port_daily) * 252)
+        port_var = float(w @ cov @ w)
+        port_vol = math.sqrt(max(port_var, 0.0))
+        port_mean = float(w @ mu)
         sharpe = (port_mean - risk_free_rate) / port_vol if port_vol > 0 else 0.0
+        marginal = cov @ w
+        history_weight = float(sum(w[i] for i in hist_idx))
 
-        # Max drawdown — use trading_day index for accurate period labels
-        cumulative = np.cumprod(1 + port_daily)
-        running_max = np.maximum.accumulate(cumulative)
-        drawdowns = (cumulative - running_max) / running_max
-        max_dd = float(np.min(drawdowns))
-        dd_end_idx = int(np.argmin(drawdowns))
-        dd_start_idx = int(np.argmax(cumulative[:dd_end_idx + 1])) if dd_end_idx > 0 else 0
-        if len(trading_days) > dd_end_idx:
-            dd_start_date = trading_days[dd_start_idx].date()
-            dd_end_date   = trading_days[dd_end_idx].date()
-        else:
-            dd_start_date = start_date + timedelta(days=dd_start_idx)
-            dd_end_date   = start_date + timedelta(days=dd_end_idx)
-        dd_period = f"{dd_start_date} to {dd_end_date}"
+        # Beta vs SPY: sample beta for covered holdings when SPY history exists,
+        # otherwise ρ(class, US equity) × σ_i / σ_SPY from the assumptions.
+        spy_rets = None
+        if spy_prices is not None and len(rets):
+            joined = self._aligned_returns({"_p": price_map[hist_syms[0]], "SPY": spy_prices})
+            spy_rets = joined["SPY"].reindex(rets.index).dropna()
+        spy_vol = (float(np.std(spy_rets.values, ddof=1) * np.sqrt(252))
+                   if spy_rets is not None and len(spy_rets) >= 20 else
+                   ASSET_CLASS_ASSUMPTIONS["us_equity"]["volatility"])
+        betas = np.empty(n)
+        for i, pos in enumerate(pos_list):
+            if i in hist_idx and spy_rets is not None and len(spy_rets) >= 20:
+                r_i = rets[hist_idx[i]].reindex(spy_rets.index).values
+                c = np.cov(r_i, spy_rets.values, ddof=1)
+                betas[i] = c[0, 1] / c[1, 1] if c[1, 1] > 0 else 0.0
+            else:
+                betas[i] = asset_class_correlation(pos["asset_class"], "us_equity") * sig[i] / spy_vol
+        port_beta = float(w @ betas)
 
-        # Portfolio beta vs SPY
-        port_beta = 0.0
-        if spy_returns is not None and len(spy_returns) >= min_len:
-            spy_aligned = spy_returns[-min_len:]
-            cov = np.cov(port_daily, spy_aligned)
-            spy_var = cov[1, 1]
-            port_beta = float(cov[0, 1] / spy_var) if spy_var > 0 else 0.0
+        # Daily portfolio series for drawdown / VaR: covered holdings on their
+        # common dates, rescaled so its volatility matches the whole portfolio's.
+        port_daily = np.array([])
+        if hist_idx:
+            w_hist = np.array([w[i] for i in hist_idx]) / history_weight
+            series = rets[[hist_idx[i] for i in hist_idx]].values @ w_hist
+            hist_vol = float(np.std(series, ddof=1) * np.sqrt(252))
+            port_daily = series * (port_vol / hist_vol) if hist_vol > 0 else series
+
+        max_dd = 0.0
+        dd_period = "insufficient price history"
+        if len(port_daily):
+            # Include the starting value (1.0) so a loss on day one counts.
+            cumulative = np.concatenate([[1.0], np.cumprod(1 + port_daily)])
+            running_max = np.maximum.accumulate(cumulative)
+            drawdowns = cumulative / running_max - 1
+            dd_end_idx = int(np.argmin(drawdowns))
+            dd_start_idx = int(np.argmax(cumulative[:dd_end_idx + 1]))
+            max_dd = float(drawdowns[dd_end_idx])
+            # cumulative[k] is the value on the k-th common price date.
+            import pandas as pd
+            common = pd.DataFrame({sym: price_map[sym] for sym in hist_syms}).dropna().index
+            dates = list(common)
+            dd_period = f"{dates[dd_start_idx]} to {dates[dd_end_idx]}"
 
         # Per-position risk
         position_risks = []
-        for i, (info, rets) in enumerate(holdings_returns):
-            rets_aligned = rets[-min_len:]
-            pos_vol = float(np.std(rets_aligned) * np.sqrt(252))
-            pos_beta = None
-            if spy_returns is not None and len(spy_returns) >= min_len:
-                spy_a = spy_returns[-min_len:]
-                cov_pos = np.cov(rets_aligned, spy_a)
-                spy_v = cov_pos[1, 1]
-                pos_beta = float(cov_pos[0, 1] / spy_v) if spy_v > 0 else None
-
-            # Risk contribution % = w_i * Cov(r_i, r_p)_annual / Var(r_p)_annual * 100
-            # This formula ensures contributions sum exactly to 100%.
-            # Both covariance and variance are annualised by multiplying daily values by 252.
-            cov_with_port_daily = float(np.cov(rets_aligned, port_daily)[0, 1])
-            cov_with_port_annual = cov_with_port_daily * 252
-            port_var = port_vol ** 2  # port_vol is already annualised
-            risk_contrib = (w_arr[i] * cov_with_port_annual / port_var * 100) if port_var > 0 else 0
-
+        for i, pos in enumerate(pos_list):
+            risk_contrib = (w[i] * marginal[i] / port_var * 100) if port_var > 0 else 0.0
             position_risks.append(PositionRisk(
-                asset_id=info["asset_id"],
-                symbol=info["symbol"],
-                name=info["name"],
-                asset_class=info["asset_class"],
-                weight_pct=Decimal(str(round(info["weight"] * 100, 2))),
-                annualized_volatility=Decimal(str(round(pos_vol * 100, 2))),
-                beta=Decimal(str(round(pos_beta, 3))) if pos_beta is not None else None,
-                risk_contribution_pct=Decimal(str(round(risk_contrib, 2))),
+                asset_id=pos["asset_id"],
+                symbol=pos["symbol"],
+                name=pos["name"],
+                asset_class=pos["asset_class"],
+                weight_pct=Decimal(str(round(pos["weight"] * 100, 2))),
+                annualized_volatility=Decimal(str(round(sig[i] * 100, 2))),
+                beta=Decimal(str(round(float(betas[i]), 3))),
+                risk_contribution_pct=Decimal(str(round(float(risk_contrib), 2))),
             ))
 
-        # Concentration
-        sorted_weights = sorted([float(h.weight_pct) for h in summary.holdings], reverse=True)
+        # Concentration — per security (accounts merged)
+        sorted_weights = sorted([p["weight"] * 100 for p in pos_list], reverse=True)
         top5 = sum(sorted_weights[:5])
         top10 = sum(sorted_weights[:10])
         # HHI in DOJ convention: weights are expressed as percentages (0–100),
         # so a single-holding portfolio → 100² = 10,000 (maximum concentration).
-        hhi = sum(w ** 2 for w in sorted_weights)
-        largest = max(summary.holdings, key=lambda h: h.weight_pct)
+        hhi = sum(x ** 2 for x in sorted_weights)
+        largest = max(pos_list, key=lambda p: p["weight"])
 
         # Look-through HHI: expand each ETF/fund to its underlying securities.
         # For each holding use either its own symbol or a look_through_ticker
@@ -443,8 +464,8 @@ class AnalysisService:
         concentration = ConcentrationRisk(
             top_5_weight_pct=Decimal(str(round(top5, 2))),
             top_10_weight_pct=Decimal(str(round(top10, 2))),
-            largest_position=largest.symbol or largest.name,
-            largest_position_weight_pct=largest.weight_pct,
+            largest_position=largest["symbol"] or largest["name"],
+            largest_position_weight_pct=Decimal(str(round(largest["weight"] * 100, 2))),
             hhi_index=Decimal(str(round(hhi, 2))),
             hhi_lookthrough=Decimal(str(round(lt_hhi, 2))) if lt_hhi is not None else None,
             hhi_lookthrough_positions=lt_positions,
@@ -452,44 +473,35 @@ class AnalysisService:
             hhi_lookthrough_top=lt_top,
         )
 
-        # Asset class risk (use same Var-normalised formula as position level)
+        # Asset class risk: weight, volatility and contribution from the same
+        # covariance matrix (class contributions sum to 100% too).
         ac_risks = []
         ac_groups: dict[str, list[int]] = {}
-        for i, (info, _) in enumerate(holdings_returns):
-            ac_groups.setdefault(info["asset_class"], []).append(i)
-
-        port_var = port_vol ** 2  # annualised variance (reused below for VaR too)
-        for ac, indices in ac_groups.items():
-            ac_weight = sum(w_arr[i] for i in indices)
-            ac_rets = sum(aligned[-min_len:, i] * w_arr[i] for i in indices) / ac_weight if ac_weight > 0 else np.zeros(min_len)
-            ac_vol = float(np.std(ac_rets) * np.sqrt(252))
-            cov_ac_daily = float(np.cov(ac_rets, port_daily)[0, 1])
-            cov_ac_annual = cov_ac_daily * 252
-            contrib = (ac_weight * cov_ac_annual / port_var * 100) if port_var > 0 else 0
-
+        for i, pos in enumerate(pos_list):
+            ac_groups.setdefault(pos["asset_class"], []).append(i)
+        for ac, idx in ac_groups.items():
+            ac_weight = float(sum(w[i] for i in idx))
+            w_ac = np.zeros(n)
+            w_ac[idx] = w[idx]
+            ac_vol = math.sqrt(max(float(w_ac @ cov @ w_ac), 0.0)) / ac_weight if ac_weight > 0 else 0.0
+            contrib = (float(w_ac @ marginal) / port_var * 100) if port_var > 0 else 0.0
             ac_risks.append(AssetClassRisk(
                 asset_class=ac,
-                weight_pct=Decimal(str(round(float(ac_weight) * 100, 2))),
+                weight_pct=Decimal(str(round(ac_weight * 100, 2))),
                 annualized_volatility=Decimal(str(round(ac_vol * 100, 2))),
                 contribution_to_risk=Decimal(str(round(contrib, 2))),
             ))
 
-        # Value-at-Risk and CVaR (Historical Simulation — no normality assumption)
-        total_mv_dec = Decimal(str(round(total_mv, 2)))
+        # Value-at-Risk and CVaR (historical simulation on the dated series)
         sorted_rets = np.sort(port_daily)
         var_95 = cvar_95 = var_99 = cvar_99 = None
         if len(sorted_rets) >= 20:
             idx_95 = max(0, int(np.floor(0.05 * len(sorted_rets))))
             idx_99 = max(0, int(np.floor(0.01 * len(sorted_rets))))
-            var_95_ret = float(sorted_rets[idx_95])
-            var_99_ret = float(sorted_rets[idx_99])
-            cvar_95_ret = float(np.mean(sorted_rets[:idx_95 + 1]))
-            cvar_99_ret = float(np.mean(sorted_rets[:idx_99 + 1]))
-            # Express as positive dollar losses
-            var_95 = Decimal(str(round(abs(var_95_ret) * total_mv, 2)))
-            cvar_95 = Decimal(str(round(abs(cvar_95_ret) * total_mv, 2)))
-            var_99 = Decimal(str(round(abs(var_99_ret) * total_mv, 2)))
-            cvar_99 = Decimal(str(round(abs(cvar_99_ret) * total_mv, 2)))
+            var_95 = Decimal(str(round(abs(float(sorted_rets[idx_95])) * total_mv, 2)))
+            cvar_95 = Decimal(str(round(abs(float(np.mean(sorted_rets[:idx_95 + 1]))) * total_mv, 2)))
+            var_99 = Decimal(str(round(abs(float(sorted_rets[idx_99])) * total_mv, 2)))
+            cvar_99 = Decimal(str(round(abs(float(np.mean(sorted_rets[:idx_99 + 1]))) * total_mv, 2)))
 
         return RiskMetrics(
             portfolio_volatility=Decimal(str(round(port_vol * 100, 2))),
@@ -506,108 +518,109 @@ class AnalysisService:
             position_risks=sorted(position_risks, key=lambda p: p.weight_pct, reverse=True),
             concentration=concentration,
             asset_class_risks=sorted(ac_risks, key=lambda a: a.weight_pct, reverse=True),
+            history_coverage_pct=Decimal(str(round(history_weight * 100, 1))),
         )
 
-    def _bulk_daily_returns(
-        self, symbols: list[str], start_date: date, end_date: date
-    ) -> dict[str, np.ndarray | None]:
+    def _bulk_price_series(
+        self, symbols: list[str], start_date: date, end_date: date, min_coverage: float = 0.6,
+    ) -> "dict[str, pd.Series]":
+        """Daily closing prices per symbol, indexed by date (DB first, then one
+        bulk yfinance download in refresh contexts only).
+
+        DB history is used when it covers at least ``min_coverage`` of the
+        window's expected trading days (min 10 rows). Weekend rows of non-crypto
+        assets are dropped — a weekend snapshot just repeats Friday's close and
+        would add fake zero-return days. Series with a ±99% one-day move are
+        treated as corrupt and skipped.
         """
-        Fetch daily returns for multiple symbols in a single yfinance call.
-        Falls back to DB price history when available. Much faster than per-ticker calls.
-        """
+        import pandas as pd
+
         if not symbols:
             return {}
-
-        results: dict[str, np.ndarray | None] = {}
-
-        # First: use DB price history (instant, no network) — but only when
-        # the DB has enough rows to meaningfully cover the requested lookback.
-        # ~70% of calendar days are trading days, so require at least 60% coverage
-        # of *expected trading days* (calendar_days × 0.70 × 0.60 ≈ 42%).
-        # The hard minimum is 10 (not 30) so short lookbacks (e.g. 30 days → only
-        # ~22 trading days available) can still use DB data. The old max(30, ...)
-        # caused short-window lookbacks to always fall through to yfinance, which
-        # then returns 9 NaN weekend rows out of 30 → only 20 valid returns →
-        # the ">20" holding threshold silently fell through to assumed returns for
-        # every holding except crypto (BTC trades 7 days/week).
-        calendar_days = max(1, (end_date - start_date).days)
-        min_rows_required = max(10, int(calendar_days * 0.60))
+        expected = max(1, (end_date - start_date).days) * 252 / 365
+        min_rows = max(10, int(expected * min_coverage))
+        results: dict[str, pd.Series] = {}
 
         from app.models.asset import Asset as AssetModel
         db_assets = {
-            a.symbol: a.id
-            for a in self.session.query(AssetModel)
-            .filter(AssetModel.symbol.in_(symbols))
-            .all()
+            a.symbol: a
+            for a in self.session.query(AssetModel).filter(AssetModel.symbol.in_(symbols)).all()
             if a.symbol
         }
-        for sym, asset_id in db_assets.items():
-            prices_rows = (
-                self.session.query(AssetPrice)
-                .filter(
-                    AssetPrice.asset_id == asset_id,
-                    AssetPrice.price_date >= start_date,
-                    AssetPrice.price_date <= end_date,
-                )
+        for sym, asset in db_assets.items():
+            rows = (
+                self.session.query(AssetPrice.price_date, AssetPrice.close_price)
+                .filter(AssetPrice.asset_id == asset.id,
+                        AssetPrice.price_date >= start_date,
+                        AssetPrice.price_date <= end_date)
                 .order_by(AssetPrice.price_date)
                 .all()
             )
-            if len(prices_rows) >= min_rows_required:
-                prices = np.array([float(p.close_price) for p in prices_rows])
-                rets = np.diff(prices) / prices[:-1]
-                # Sanity-check: if any single-day return exceeds ±99%, the DB
-                # history is corrupted (e.g. wrong magnitude). Fall back to yfinance.
-                if np.any(np.abs(rets) > 0.99):
-                    continue
-                results[sym] = rets
+            is_crypto = str(getattr(asset.asset_class, "value", asset.asset_class)) == "crypto"
+            pts = {d: float(px) for d, px in rows if is_crypto or d.weekday() < 5}
+            if len(pts) < min_rows:
+                continue
+            ser = pd.Series(pts).sort_index()
+            if (ser.pct_change().abs() > 0.99).any():
+                continue
+            results[sym] = ser
 
-        # Second: bulk-download remaining symbols from yfinance — but ONLY in an
+        # Bulk-download remaining symbols from yfinance — but ONLY in an
         # explicit-refresh context. During an ordinary page render we never hit
         # the network (it scales with portfolio size and would hang the page);
-        # symbols without stored history simply fall back to assumed returns.
+        # symbols without stored history simply count as "no history".
         # Fetch by the Yahoo-safe form (BRK/B → BRK-B) and skip symbols no feed
         # can resolve (CUSIPs, subtotal rows) — they can only fail noisily.
         missing_by_ysym: dict[str, list[str]] = {}
-        for s in symbols:
-            if s in results:
+        for sym in symbols:
+            if sym in results:
                 continue
-            ysym = yahoo_symbol(s)
+            ysym = yahoo_symbol(sym)
             if ysym is not None:
-                missing_by_ysym.setdefault(ysym, []).append(s)
+                missing_by_ysym.setdefault(ysym, []).append(sym)
         if missing_by_ysym and network_allowed():
             try:
                 import yfinance as yf
                 fetch_syms = list(missing_by_ysym)
-                raw = yf.download(
-                    fetch_syms,
-                    start=str(start_date),
-                    end=str(end_date),
-                    auto_adjust=True,
-                    progress=False,
-                    threads=True,
-                )
+                raw = yf.download(fetch_syms, start=str(start_date),
+                                  end=str(end_date + timedelta(days=1)),   # end is exclusive
+                                  auto_adjust=True, progress=False, threads=True)
                 if not raw.empty:
                     close = raw["Close"] if "Close" in raw.columns else raw
-                    if hasattr(close, "columns"):
-                        for ysym, origs in missing_by_ysym.items():
-                            if ysym in close.columns:
-                                col = close[ysym].dropna()
-                                if len(col) >= 10:
-                                    p = col.values
-                                    for sym in origs:
-                                        results[sym] = np.diff(p) / p[:-1]
-                    else:
-                        # Single ticker — close is a Series
-                        if len(fetch_syms) == 1:
-                            col = close.dropna()
-                            if len(col) >= 10:
-                                p = col.values
-                                for sym in missing_by_ysym[fetch_syms[0]]:
-                                    results[sym] = np.diff(p) / p[:-1]
+                    cols = ({y: close[y] for y in missing_by_ysym if y in close.columns}
+                            if hasattr(close, "columns") else
+                            ({fetch_syms[0]: close} if len(fetch_syms) == 1 else {}))
+                    for ysym, col in cols.items():
+                        col = col.dropna()
+                        if len(col) >= 10:
+                            ser = pd.Series(col.values, index=[ts.date() for ts in col.index])
+                            for sym in missing_by_ysym[ysym]:
+                                results[sym] = ser
             except Exception:
                 pass
 
         return results
+
+    def _bulk_daily_returns(
+        self, symbols: list[str], start_date: date, end_date: date
+    ) -> dict[str, np.ndarray | None]:
+        """Per-symbol simple daily returns (each series on its own dates).
+        Combine several symbols with _aligned_returns, which joins on dates."""
+        return {
+            sym: np.diff(ser.values) / ser.values[:-1]
+            for sym, ser in self._bulk_price_series(symbols, start_date, end_date).items()
+        }
+
+    def _aligned_returns(self, price_map: "dict[str, pd.Series]") -> "pd.DataFrame":
+        """Simple daily returns of several symbols on their COMMON dates: prices
+        are inner-joined by date first, so a missing day in one series spans two
+        days for everyone instead of shifting every earlier return by one."""
+        import pandas as pd
+
+        if not price_map:
+            return pd.DataFrame()
+        prices = pd.DataFrame(price_map).sort_index().dropna(how="any")
+        return prices.pct_change().iloc[1:]
 
     def _get_daily_returns(
         self, symbol: str, start_date: date, end_date: date
@@ -2040,35 +2053,28 @@ class AnalysisService:
 
     def get_correlation_matrix(self, lookback_days: int = 252) -> CorrelationMatrix:
         """
-        Compute pairwise Pearson correlation of daily log-returns for all
-        holdings that have price history.  Private / illiquid positions without
-        sufficient history are excluded so the matrix remains clean.
+        Pairwise Pearson correlation of simple daily returns, aligned by date,
+        for holdings with price history over the lookback (trading days).
+        Private / illiquid positions without sufficient history are excluded.
         """
+        import math
+
         summary = self.portfolio_svc.get_summary()
         end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_days)
+        start_date = end_date - timedelta(days=math.ceil(lookback_days * 365 / 252))
 
-        symbols = [h.symbol for h in summary.holdings if h.symbol]
-        bulk = self._bulk_daily_returns(symbols, start_date, end_date)
-
-        # Keep only symbols with enough data
-        good: list[tuple[str, np.ndarray]] = [
-            (sym, ret) for sym, ret in bulk.items()
-            if ret is not None and len(ret) >= 30
-        ]
-        if len(good) < 2:
+        symbols = sorted({h.symbol for h in summary.holdings if h.symbol})
+        rets = self._aligned_returns(self._bulk_price_series(symbols, start_date, end_date))
+        if len(rets) < 30 or rets.shape[1] < 2:
             return CorrelationMatrix(
-                symbols=[s for s, _ in good],
+                symbols=list(rets.columns) if len(rets) >= 30 else [],
                 matrix=[],
                 lookback_days=lookback_days,
                 as_of=end_date,
             )
 
-        good.sort(key=lambda x: x[0])
-        symbol_list = [s for s, _ in good]
-        min_len = min(len(r) for _, r in good)
-        mat = np.column_stack([r[-min_len:] for _, r in good])
-        corr = np.corrcoef(mat.T)
+        symbol_list = sorted(rets.columns)
+        corr = rets[symbol_list].corr().values
 
         matrix_out = [
             [Decimal(str(round(float(corr[i, j]), 4))) for j in range(len(symbol_list))]
@@ -2085,15 +2091,17 @@ class AnalysisService:
 
     def get_return_metrics(self) -> ReturnMetrics:
         """
-        Compute Time-Weighted Return (TWR) and approximate Money-Weighted Return
-        (XIRR / IRR) for the whole portfolio over multiple trailing windows.
+        Trailing returns of the CURRENT holdings (a backtest, not a true
+        time-weighted return: the app has no record of past portfolio values or
+        external cash flows to chain-link).
 
-        TWR methodology: chain-link sub-period returns between cash-flow dates
-        using daily portfolio values derived from stored price history.
-
-        For portfolios without dense price history, we fall back to computing
-        geometric cumulative returns from the daily portfolio return series used
-        by the risk engine.
+        Each window values today's positions buy-and-hold from the window start
+        (price on or before that date) to the latest price. Cash and other
+        stable-value positions count at 0% return. A position without price
+        history back to the window start is left out of that window and the
+        rest are re-weighted; ``history_coverage_pct`` reports how much of the
+        portfolio the 1-year figure covers. Returns are annualised only for
+        windows of at least one year.
         """
         summary = self.portfolio_svc.get_summary()
         total_mv = float(summary.total_market_value)
@@ -2101,60 +2109,73 @@ class AnalysisService:
             return ReturnMetrics()
 
         end_date = date.today()
-        windows = {
-            "1yr": 252,
-            "3yr": 756,
-            "5yr": 1260,
-        }
-
-        # Fetch bulk returns
-        symbols = [h.symbol for h in summary.holdings if h.symbol]
-        all_returns = self._bulk_daily_returns(symbols, end_date - timedelta(days=1300), end_date)
-
-        weights: list[float] = []
-        return_series: list[np.ndarray] = []
+        positions: dict[str, float] = {}
+        flat_mv = 0.0
+        uncovered_mv = 0.0
         for h in summary.holdings:
-            w = float(h.market_value) / total_mv
-            rets = all_returns.get(h.symbol) if h.symbol else None
-            if rets is not None and len(rets) >= 30:
-                weights.append(w)
-                return_series.append(rets)
+            mv = float(h.market_value)
+            sym = h.symbol.upper() if h.symbol else None
+            if sym and sym in STABLE_VALUE_SYMBOLS:
+                flat_mv += mv
+            elif h.symbol:
+                positions[h.symbol] = positions.get(h.symbol, 0.0) + mv
+            else:
+                uncovered_mv += mv
 
-        if not return_series:
-            return ReturnMetrics()
+        prices = self._bulk_price_series(sorted(positions), end_date - timedelta(days=5 * 366 + 10),
+                                         end_date, min_coverage=0.0)
+        slack = timedelta(days=7)
 
-        min_len = min(len(r) for r in return_series)
-        aligned = np.column_stack([r[-min_len:] for r in return_series])
-        w_arr = np.array(weights)
-        w_arr = w_arr / w_arr.sum()
-        port_daily = aligned @ w_arr  # daily portfolio returns
-
-        def _twr(n_days: int) -> Decimal | None:
-            if len(port_daily) < n_days:
+        def _window(start: date) -> tuple[float, float] | None:
+            """(cumulative return, weight covered) from ``start`` to today."""
+            start_val = end_val = flat_mv
+            for sym, mv in positions.items():
+                ser = prices.get(sym)
+                if ser is None or ser.index[0] > start + slack:
+                    continue
+                p0 = float(ser[ser.index <= start].iloc[-1]) if (ser.index <= start).any() else float(ser.iloc[0])
+                p1 = float(ser.iloc[-1])
+                if p0 <= 0:
+                    continue
+                end_val += mv
+                start_val += mv * p0 / p1
+            if end_val <= flat_mv or start_val <= 0:
                 return None
-            sub = port_daily[-n_days:]
-            # Chain-link: product of (1 + r_t) minus 1, annualised
-            cumulative = float(np.prod(1 + sub)) - 1
-            years = n_days / 252
-            annualised = (1 + cumulative) ** (1 / years) - 1
-            return Decimal(str(round(annualised * 100, 2)))
+            return end_val / start_val - 1, end_val / total_mv
 
-        inception_twr = None
-        if len(port_daily) > 0:
-            cumulative_all = float(np.prod(1 + port_daily)) - 1
-            years_all = len(port_daily) / 252
-            if years_all > 0:
-                inception_ann = (1 + cumulative_all) ** (1 / years_all) - 1
-                inception_twr = Decimal(str(round(inception_ann * 100, 2)))
+        def _ann(cum: float, years: float) -> Decimal:
+            r = (1 + cum) ** (1 / years) - 1 if years >= 1 else cum
+            return Decimal(str(round(r * 100, 2)))
 
-        inception_date = end_date - timedelta(days=len(port_daily))
+        out: dict[str, Decimal | None] = {}
+        coverage = None
+        for key, yrs in (("twr_1yr", 1), ("twr_3yr", 3), ("twr_5yr", 5)):
+            res = _window(end_date - timedelta(days=round(365.25 * yrs)))
+            out[key] = _ann(res[0], yrs) if res else None
+            if key == "twr_1yr" and res:
+                coverage = Decimal(str(round(res[1] * 100, 1)))
+
+        # "Since": the earliest date by which positions making up ≥90% of the
+        # priced portfolio have history.
+        inception = since = None
+        starts = sorted((prices[sym].index[0], mv) for sym, mv in positions.items() if sym in prices)
+        if starts:
+            need = 0.9 * (sum(positions.values()) + flat_mv) - flat_mv
+            acc = 0.0
+            for d, mv in starts:
+                acc += mv
+                if acc >= need:
+                    since = d
+                    break
+            since = since or starts[-1][0]
+            res = _window(since)
+            if res:
+                inception = _ann(res[0], (end_date - since).days / 365.25)
 
         return ReturnMetrics(
-            twr_1yr=_twr(252),
-            twr_3yr=_twr(756),
-            twr_5yr=_twr(1260),
-            twr_inception=inception_twr,
-            annualized_since=inception_date,
+            twr_1yr=out["twr_1yr"], twr_3yr=out["twr_3yr"], twr_5yr=out["twr_5yr"],
+            twr_inception=inception, annualized_since=since,
+            history_coverage_pct=coverage,
         )
 
     def get_period_returns(self) -> list[dict]:
