@@ -34,6 +34,8 @@ class TaxSummary(BaseModel):
     deductible_expenses: Decimal
     estimated_tax_liability: Decimal
     loss_carryforward: Decimal
+    wash_sale_disallowed: Decimal = Decimal("0")     # losses deferred into replacement lots
+    capital_loss_deduction: Decimal = Decimal("0")   # net loss used against ordinary income (≤ $3,000)
 
 
 class ElectionSimResult(BaseModel):

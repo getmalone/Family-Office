@@ -207,6 +207,10 @@ class PortfolioService:
         self.session.add(lot)
         self.session.flush()
 
+        # A purchase within 30 days AFTER an earlier loss sale is a wash-sale
+        # replacement too (the sell-time check only sees earlier purchases).
+        self._apply_wash_sales_for_buy(lot)
+
         return txn
 
     def execute_sell(
@@ -230,6 +234,14 @@ class PortfolioService:
         txn_date = transaction_date or date.today()
         total = quantity * price_per_unit - fees
 
+        # Select lots first: refuse to sell more than is held.
+        lots = self._select_lots(account_id, asset_id, quantity, method, specific_lot_ids)
+        available = sum((lot.remaining_quantity for lot in lots), Decimal("0"))
+        if quantity <= 0 or quantity > available:
+            raise ValueError(
+                f"Cannot sell {quantity} units: only {available} available in the selected lots."
+            )
+
         txn = Transaction(
             account_id=account_id,
             asset_id=asset_id,
@@ -246,10 +258,8 @@ class PortfolioService:
         self.session.add(txn)
         self.session.flush()
 
-        # Select lots
-        lots = self._select_lots(account_id, asset_id, quantity, method, specific_lot_ids)
-
         disposals = []
+        sold_lots: dict[int, TaxLot] = {}
         remaining = quantity
         for lot in lots:
             if remaining <= 0:
@@ -266,10 +276,11 @@ class PortfolioService:
                 quantity_disposed=dispose_qty,
                 proceeds_per_unit=price_per_unit,
                 realized_gain_loss=realized,
-                is_short_term=not lot.is_long_term,
+                is_short_term=not lot.is_long_term_on(txn_date),   # held to the SALE date
                 disposal_date=txn_date,
             )
             self.session.add(disposal)
+            sold_lots[lot.id] = lot
 
             lot.remaining_quantity -= dispose_qty
             if lot.remaining_quantity <= 0:
@@ -280,10 +291,29 @@ class PortfolioService:
 
         self.session.flush()
 
-        # Check for wash sales on loss disposals
+        # Check for wash sales on loss disposals (lots sold in this same trade
+        # can't be their own replacements).
         for disposal in disposals:
             if disposal.realized_gain_loss < 0:
-                self._check_wash_sale(disposal, txn_date)
+                sold = sold_lots[disposal.tax_lot_id]
+                window = (txn_date - timedelta(days=30), txn_date + timedelta(days=30))
+                candidates = (
+                    self.session.query(TaxLot)
+                    .filter(
+                        TaxLot.asset_id == sold.asset_id,
+                        TaxLot.acquisition_date >= window[0],
+                        TaxLot.acquisition_date <= window[1],
+                        TaxLot.id.notin_(list(sold_lots)),
+                        TaxLot.is_closed == False,
+                        TaxLot.remaining_quantity > 0,
+                    )
+                    .order_by(TaxLot.acquisition_date, TaxLot.id)
+                    .all()
+                )
+                for replacement in candidates:
+                    left, _ = self._wash_match(disposal, sold, replacement)
+                    if left <= 0:
+                        break
 
         return txn, disposals
 
@@ -314,59 +344,106 @@ class PortfolioService:
 
         return query.all()
 
-    def _check_wash_sale(self, disposal: TaxLotDisposal, sale_date: date) -> None:
-        """
-        Check for wash-sale rule violations.
+    # ── Wash sales (IRC §1091) ───────────────────────────────────────────────
+    # A loss sale is a wash sale to the extent substantially identical shares
+    # are bought within 30 days before or after it (in any account). Shares are
+    # matched one-for-one: only the loss on matched shares is disallowed, it is
+    # added to those replacement shares' basis, and their holding period starts
+    # as if they'd been held as long as the shares sold. A replacement bought
+    # in a tax-deferred account (IRA etc.) disallows the loss permanently with
+    # no basis adjustment (Rev. Rul. 2008-5). Each replacement share is used
+    # once: a matched portion is split into its own lot and flagged.
 
-        If a substantially identical security was purchased within 30 days before or
-        after the loss sale, the loss is disallowed and added to the replacement lot's
-        cost basis.
-        """
-        window_start = sale_date - timedelta(days=30)
-        window_end = sale_date + timedelta(days=30)
+    def _unwashed_quantity(self, disposal: TaxLotDisposal) -> Decimal:
+        rows = (self.session.query(WashSaleAdjustment)
+                .filter(WashSaleAdjustment.disallowed_disposal_id == disposal.id).all())
+        if any(r.matched_quantity is None for r in rows):   # legacy: whole disposal matched
+            return Decimal("0")
+        return disposal.quantity_disposed - sum((r.matched_quantity for r in rows), Decimal("0"))
 
-        lot = self.session.get(TaxLot, disposal.tax_lot_id)
-        if not lot:
-            return
+    def _wash_match(
+        self, disposal: TaxLotDisposal, sold_lot: TaxLot, replacement: TaxLot,
+    ) -> tuple[Decimal, TaxLot | None]:
+        """Match as many of ``disposal``'s loss shares as ``replacement`` can
+        absorb. Returns (loss shares still unmatched, the unmatched remainder of
+        the replacement lot when it had to be split, else None)."""
+        sold_account = self.session.get(Account, sold_lot.account_id)
+        if sold_account is not None and not sold_account.is_taxable:
+            return Decimal("0"), None    # losses inside an IRA aren't deductible anyway
+        unwashed = self._unwashed_quantity(disposal)
+        if unwashed <= 0 or replacement.is_wash_sale_adjusted or replacement.remaining_quantity <= 0:
+            return unwashed, None
 
-        # Find replacement purchases within the wash-sale window
-        replacement_lots = (
-            self.session.query(TaxLot)
+        matched = min(unwashed, replacement.remaining_quantity)
+        remainder = None
+        if matched < replacement.remaining_quantity:
+            # Split off the unmatched shares so they keep their own basis.
+            rest = replacement.remaining_quantity - matched
+            remainder = TaxLot(
+                account_id=replacement.account_id, asset_id=replacement.asset_id,
+                acquisition_date=replacement.acquisition_date,
+                acquisition_transaction_id=replacement.acquisition_transaction_id,
+                original_quantity=rest, remaining_quantity=rest,
+                cost_basis_per_unit=replacement.cost_basis_per_unit,
+                original_cost_basis_per_unit=replacement.original_cost_basis_per_unit,
+                cost_basis_method=replacement.cost_basis_method,
+                holding_period_start=replacement.holding_period_start,
+            )
+            self.session.add(remainder)
+            replacement.original_quantity -= rest
+            replacement.remaining_quantity = matched
+
+        loss_per_share = -disposal.realized_gain_loss / disposal.quantity_disposed
+        disallowed = (loss_per_share * matched).quantize(Decimal("0.01"))
+        disposal.is_wash_sale = True
+        disposal.wash_sale_disallowed = (disposal.wash_sale_disallowed or Decimal("0")) + disallowed
+
+        replacement.is_wash_sale_adjusted = True
+        repl_account = self.session.get(Account, replacement.account_id)
+        note = None
+        if repl_account is None or repl_account.is_taxable:
+            replacement.cost_basis_per_unit += loss_per_share
+            replacement.wash_sale_disallowed_loss = (
+                (replacement.wash_sale_disallowed_loss or Decimal("0")) + disallowed)
+            held = disposal.disposal_date - sold_lot.holding_start
+            replacement.holding_period_start = replacement.acquisition_date - held
+        else:
+            note = "Replacement bought in a tax-deferred account: loss permanently disallowed."
+
+        self.session.add(WashSaleAdjustment(
+            disallowed_disposal_id=disposal.id, replacement_lot_id=replacement.id,
+            disallowed_loss=disallowed, matched_quantity=matched,
+            adjustment_date=max(disposal.disposal_date, replacement.acquisition_date),
+            notes=note,
+        ))
+        self.session.flush()
+        return unwashed - matched, remainder
+
+    def _apply_wash_sales_for_buy(self, lot: TaxLot) -> None:
+        """Treat a new purchase as the replacement for earlier loss sales of the
+        same security within the preceding 30 days."""
+        window_start = lot.acquisition_date - timedelta(days=30)
+        disposals = (
+            self.session.query(TaxLotDisposal)
+            .join(TaxLot, TaxLotDisposal.tax_lot_id == TaxLot.id)
             .filter(
                 TaxLot.asset_id == lot.asset_id,
-                TaxLot.acquisition_date >= window_start,
-                TaxLot.acquisition_date <= window_end,
                 TaxLot.id != lot.id,
-                TaxLot.is_closed == False,
+                TaxLotDisposal.realized_gain_loss < 0,
+                TaxLotDisposal.disposal_date >= window_start,
+                TaxLotDisposal.disposal_date <= lot.acquisition_date,
             )
-            .order_by(TaxLot.acquisition_date)
+            .order_by(TaxLotDisposal.disposal_date, TaxLotDisposal.id)
             .all()
         )
-
-        if replacement_lots:
-            replacement = replacement_lots[0]
-            disallowed = abs(disposal.realized_gain_loss)
-
-            # Mark disposal as wash sale
-            disposal.is_wash_sale = True
-            disposal.wash_sale_disallowed = disallowed
-
-            # Adjust replacement lot's cost basis using original_quantity (not remaining_quantity)
-            # to avoid inflating per-unit basis for partially sold lots
-            replacement.cost_basis_per_unit += disallowed / replacement.original_quantity
-            replacement.is_wash_sale_adjusted = True
-            replacement.wash_sale_disallowed_loss += disallowed
-
-            # Create audit record
-            self.session.add(
-                WashSaleAdjustment(
-                    disallowed_disposal_id=disposal.id,
-                    replacement_lot_id=replacement.id,
-                    disallowed_loss=disallowed,
-                    adjustment_date=sale_date,
-                )
-            )
-            self.session.flush()
+        current: TaxLot | None = lot
+        for disposal in disposals:
+            if current is None:
+                break
+            sold = self.session.get(TaxLot, disposal.tax_lot_id)
+            _, remainder = self._wash_match(disposal, sold, current)
+            if current.is_wash_sale_adjusted:
+                current = remainder        # fully used unless part was split off
 
     def get_open_lots(
         self, account_id: int | None = None, asset_id: int | None = None

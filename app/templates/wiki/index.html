@@ -665,9 +665,9 @@ KFO_LLM_MODEL=claude-sonnet-4-5</code></pre>
   <ul>
     <li><strong>get_summary(account_id=None)</strong> — Aggregates all open <code>TaxLot</code> records, fetches current prices, returns <code>PortfolioSummary</code> with market values, cost basis, unrealized P&amp;L, YTD realized gains, and allocation percentages.</li>
     <li><strong>execute_buy()</strong> — Creates <code>Transaction</code> (BUY) + <code>TaxLot</code>. Fees are folded into cost basis: <code>cpu = (qty × price + fees) / qty</code>.</li>
-    <li><strong>execute_sell()</strong> — Creates <code>Transaction</code> (SELL), selects lots via <code>_select_lots(method)</code>, creates <code>TaxLotDisposal</code> records with <code>realized_gain_loss</code>, decrements lot quantities, calls <code>_check_wash_sale()</code> on any loss disposal.</li>
+    <li><strong>execute_sell()</strong> — Creates <code>Transaction</code> (SELL), selects lots via <code>_select_lots(method)</code>, creates <code>TaxLotDisposal</code> records with <code>realized_gain_loss</code>, decrements lot quantities, refuses to sell more than the selected lots hold, classifies short/long-term as of the <em>sale</em> date (long-term only after the one-year anniversary), and runs the wash-sale match on any loss disposal.</li>
     <li><strong>_select_lots(method)</strong> — Supports FIFO (oldest first), LIFO (newest first), HIFO (highest cost first), and specific lot ID.</li>
-    <li><strong>_check_wash_sale(disposal, sale_date)</strong> — Scans for any purchase of the same asset within ±30 days. On match: marks disposal <code>is_wash_sale=True</code>, increments replacement lot's <code>cost_basis_per_unit</code> by the disallowed loss amount, creates <code>WashSaleAdjustment</code>.</li>
+    <li><strong>_wash_match(disposal, sold_lot, replacement)</strong> — Wash sales (IRC §1091), run at sell time against purchases within ±30 days and at buy time against loss sales in the prior 30 days, across all accounts. Shares match one-for-one: only the loss on matched shares is disallowed; a partly matched replacement lot is split; matched shares get the per-share loss added to basis and a <code>holding_period_start</code> that tacks on the sold shares' holding period. A replacement bought in a tax-deferred account disallows the loss permanently with no basis add (Rev. Rul. 2008-5). Each match is a <code>WashSaleAdjustment</code> with <code>matched_quantity</code>.</li>
     <li><strong>get_portfolio_history(days=90)</strong> — Returns date-labeled total and per-account values using stored <code>AssetPrice</code> records with forward-fill for missing dates.</li>
     <li><strong>get_top_movers(limit=10)</strong> — Top gainers and losers by unrealized P&amp;L percent.</li>
   </ul>
@@ -682,7 +682,7 @@ KFO_LLM_MODEL=claude-sonnet-4-5</code></pre>
 
   <h3>TaxService</h3>
   <ul>
-    <li><strong>find_harvest_candidates(min_loss, account_id)</strong> — Scans open lots in taxable accounts, computes unrealized loss at current price, flags wash-sale risk (purchase within 30 days), estimates tax savings at <code>(37% ST or 20% LT) + 3.8% NIIT</code>. Sorted by loss magnitude.</li>
+    <li><strong>find_harvest_candidates(min_loss, account_id)</strong> — Scans open lots in taxable accounts, computes unrealized loss at current price, flags wash-sale risk (purchase within 30 days), estimates tax savings per loss lot at its own rate (<code>37% ST or 20% LT) + 3.8% NIIT</code>); wash-sale risk = shares bought in the last 30 days in any account that aren't among the loss lots being sold. Sorted by loss magnitude.</li>
     <li><strong>get_tax_summary(tax_year)</strong> — Queries disposals for realized gains/losses; queries transactions for dividend and interest income; queries deductible expenses. Estimates liability by splitting income into ST (37%) and LT+qualified-div (20%+3.8% NIIT) buckets. Expenses offset ST income first. Loss carryforward = max(0, |net_loss| − $3,000) per IRC §1211(b).</li>
     <li><strong>simulate_election(election_type)</strong> — <code>"cost_basis_method"</code>: simulates FIFO/HIFO/LIFO. <code>"section_475"</code>: describes mark-to-market trader status. HIFO flagged as <code>recommended=True</code>.</li>
   </ul>
@@ -1242,18 +1242,15 @@ for bucket in (taxable, traditional, roth):  # in order
   </table></div>
 
   <h3>Tax Liability Calculation</h3>
-  <p><code>get_tax_summary()</code> splits income into two buckets and taxes each at its correct rate:</p>
-  <pre><code># Short-term bucket: ST gains + interest → 37%
-st_taxable = (st_gains + st_losses) + interest
-# Long-term bucket: LT gains + qualified dividends → 20% + 3.8% NIIT
-lt_taxable = (lt_gains + lt_losses) + dividends
-# Deductible expenses offset highest-rate income first (ST bucket)
-st_after = max(0, st_taxable - expenses)
-remaining_expenses = max(0, expenses - st_taxable)
-lt_after = max(0, lt_taxable - remaining_expenses)
-estimated_tax = st_after × 0.37 + lt_after × 0.238
-# IRC §1211(b): first $3,000 of net loss deductible vs ordinary income; remainder carries forward
-loss_carryforward = max(0, |net_loss| - 3000)</code></pre>
+  <p><code>get_tax_summary()</code> uses disposals, dividends and interest in <strong>taxable accounts only</strong> (soft-deleted accounts still count), adds wash-sale-disallowed losses back (they're deferred into the replacement lot), nets per Schedule D and taxes each bucket at its rate:</p>
+  <pre><code># Gain/loss recognised now = realized + wash_sale_disallowed
+st_net = st_gains + st_losses;  lt_net = lt_gains + lt_losses
+# A net loss in one holding period offsets a net gain in the other
+# Ordinary bucket: net ST gain + interest → 37% + 3.8% NIIT
+# Preferential bucket: net LT gain + qualified dividends → 20% + 3.8% NIIT
+# Deductible expenses offset the ordinary bucket first
+# IRC §1211(b): up to $3,000 of net capital loss offsets ordinary income
+#   (any part not absorbed here offsets outside income at 37%); rest carries forward</code></pre>
 
   <h3>Tax-Loss Harvesting Logic</h3>
   <ol>
