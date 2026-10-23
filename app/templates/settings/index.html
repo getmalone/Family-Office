@@ -124,6 +124,28 @@
   </div>
   {% endif %}
 
+  {# ── Import from screenshots (Claude) ── #}
+  <div id="screenshots" class="bg-white shadow rounded-lg p-6">
+    <h3 class="font-medium text-gray-900 mb-1">Import an account from screenshots</h3>
+    <p class="text-sm text-gray-500 mb-3">
+      Upload <strong>all</strong> the screenshots of <strong>one</strong> account's positions
+      (every page or scroll position). Claude reads them, and you review and edit
+      the holdings before anything is saved. Importing replaces that account's
+      previously imported positions.
+    </p>
+    <form method="post" action="/settings/import-screenshots" enctype="multipart/form-data"
+          class="flex flex-wrap items-center gap-3"
+          onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Reading screenshots…';">
+      <input type="file" name="files" accept="image/png,image/jpeg,image/webp,image/gif" multiple required class="text-sm">
+      <button type="submit" class="bg-indigo-600 text-white rounded-md px-5 py-2 text-sm hover:bg-indigo-700">Read screenshots</button>
+    </form>
+    <p class="mt-3 text-xs text-gray-500">
+      Privacy: the images are sent to Anthropic's API using your API key above and are
+      never saved by this app. Only the last 4 digits of the account number are kept.
+      Up to 10 images, 5 MB each.
+    </p>
+  </div>
+
   {# ── Import (CSV / JSON / XML) ── #}
   <div class="bg-white shadow rounded-lg p-6">
     <h3 class="font-medium text-gray-900 mb-1">Import accounts &amp; positions</h3>

@@ -117,11 +117,11 @@ class AccountingService:
                 .filter(TaxLotDisposal.sale_transaction_id == transaction.id)
                 .all()
             )
-            total_basis = sum(
-                d.quantity_disposed * (d.proceeds_per_unit - d.realized_gain_loss / d.quantity_disposed)
-                for d in disposals
-            ) if disposals else transaction.total_amount
-            total_gain = sum(d.realized_gain_loss for d in disposals)
+            # realized_gain_loss is already net of the trade's fees, so with
+            # cash = net proceeds the basis relieved is net proceeds − gain
+            # (balances by construction, with or without fees).
+            total_gain = sum((d.realized_gain_loss for d in disposals), Decimal("0"))
+            total_basis = transaction.total_amount - total_gain
 
             lines = [
                 {"coa_id": cash_acct.id, "debit": transaction.total_amount, "credit": Decimal("0")},
@@ -239,6 +239,15 @@ class AccountingService:
         asset_items = self._get_balances_by_type("asset", beginning, as_of)
         liability_items = self._get_balances_by_type("liability", beginning, as_of)
         equity_items = self._get_balances_by_type("equity", beginning, as_of)
+        # No closing entries are posted, so income and expenses to date are
+        # still in their own accounts: show their net as an equity line so
+        # Assets = Liabilities + Equity.
+        net_income = (
+            sum((amt for _, amt in self._get_balances_by_type("revenue", beginning, as_of)), Decimal("0"))
+            - sum((amt for _, amt in self._get_balances_by_type("expense", beginning, as_of)), Decimal("0"))
+        )
+        if net_income:
+            equity_items.append(("Earnings Not Yet Closed (income − expenses)", net_income))
 
         return BalanceSheet(
             as_of_date=as_of,

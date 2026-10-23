@@ -502,7 +502,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload</code></pre>
         <tr><td class="mono">llm_model</td><td><code>KFO_LLM_MODEL</code></td><td><code>claude-sonnet-4-5</code></td><td>Override to any Anthropic model ID</td></tr>
         <tr><td class="mono">market_data_cache_ttl_minutes</td><td><code>KFO_MARKET_DATA_CACHE_TTL_MINUTES</code></td><td><code>15</code></td><td>Price cache age before re-fetch</td></tr>
         <tr><td class="mono">trade_approval_threshold</td><td><code>KFO_TRADE_APPROVAL_THRESHOLD</code></td><td><code>50000</code></td><td>Dollar amount above which trades need approval</td></tr>
-        <tr><td class="mono">gift_approval_threshold</td><td><code>KFO_GIFT_APPROVAL_THRESHOLD</code></td><td><code>18000</code></td><td>Annual exclusion trigger (2026 IRS limit)</td></tr>
+        <tr><td class="mono">gift_approval_threshold</td><td><code>KFO_GIFT_APPROVAL_THRESHOLD</code></td><td><code>19000</code></td><td>Annual exclusion trigger (2026 IRS limit)</td></tr>
         <tr><td class="mono">host</td><td><code>KFO_HOST</code></td><td><code>127.0.0.1</code></td><td>Loopback by default; set <code>0.0.0.0</code> to reach the app from other devices (set an access code first). See §19.</td></tr>
         <tr><td class="mono">port</td><td><code>KFO_PORT</code></td><td><code>8000</code></td><td>Desktop launcher auto-picks a free port if this is taken</td></tr>
         <tr><td class="mono">field_encryption_key</td><td><code>KFO_FIELD_ENCRYPTION_KEY</code></td><td><code>""</code></td><td>AES key for SSN/account number columns</td></tr>
@@ -707,7 +707,7 @@ KFO_LLM_MODEL=claude-sonnet-4-5</code></pre>
 
   <h3>EstateService</h3>
   <ul>
-    <li><strong>record_gift()</strong> — Allocates gift between annual exclusion (per donor→recipient pair per year, up to $18,000) and lifetime exemption (~$13.61M). Charitable gifts (<code>is_charitable=True</code>) skip both allocations entirely — no annual exclusion or lifetime exemption consumed, no Form 709 required. Annual exclusion tracking filters explicitly to the matching recipient (including NULL→NULL for entity/external gifts) to prevent cross-recipient aggregation errors. Form 709 auto-set when non-charitable excess exists.</li>
+    <li><strong>record_gift()</strong> — Allocates gift between annual exclusion (per donor→recipient pair per year, up to the year's limit: $18,000 in 2024, $19,000 in 2025–26) and lifetime exemption (the year's basic exclusion: $13.99M in 2025, $15M in 2026). Charitable gifts (<code>is_charitable=True</code>) skip both allocations entirely — no annual exclusion or lifetime exemption consumed, no Form 709 required. Annual exclusion is tracked per recipient — family member, entity, or outside person matched by name (case-insensitive) — so each outside recipient gets their own exclusion. Form 709 auto-set when non-charitable excess exists.</li>
     <li><strong>simulate_grat(params)</strong> — Runs GRAT annuity math for each growth rate scenario. Compounds balance annually, subtracts annuity payment, calculates remainder. Tax savings estimated at 40% estate tax rate. Persists each scenario as a <code>GRATSimulation</code> row.</li>
     <li><strong>get_ownership_tree()</strong> — Returns nested <code>OwnershipNode</code> tree for all active family members with linked accounts and percentages.</li>
   </ul>
@@ -1303,8 +1303,8 @@ st_net = st_gains + st_losses;  lt_net = lt_gains + lt_losses
 
   <h3>Gift Tracking</h3>
   <ul>
-    <li><strong>Annual exclusion (2026):</strong> $18,000 per donor-recipient pair. First $18k of any gift applies here.</li>
-    <li><strong>Lifetime exemption:</strong> ~$13.61M per donor. Amounts above the annual exclusion consume lifetime exemption.</li>
+    <li><strong>Annual exclusion (2026):</strong> $19,000 per donor-recipient pair. The first $19k of any gift applies here (amounts by year in <code>ANNUAL_EXCLUSION_BY_YEAR</code>).</li>
+    <li><strong>Lifetime exemption:</strong> $15M per donor in 2026 (P.L. 119-21; $13.99M in 2025). Amounts above the annual exclusion consume lifetime exemption.</li>
     <li><strong>Form 709:</strong> Auto-flagged (<code>form_709_filed=True</code>) when any gift exceeds the annual exclusion.</li>
     <li><strong>In-kind gifts:</strong> Assets can be gifted with a linked <code>asset_id</code> and <code>donor_cost_basis</code>.</li>
     <li><strong>Charitable gifts:</strong> Tracked separately with <code>is_charitable=True</code>.</li>
