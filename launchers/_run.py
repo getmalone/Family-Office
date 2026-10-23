@@ -12,13 +12,21 @@ duplicated in shell/batch):
      first run). A wrong password fails here with a friendly message instead of a
      raw stack trace from the server.
   3. Pick a free port, start the web server, and open the browser once it's up.
+  4. Restart in place after an in-app update: stop the server, re-sync the
+     locked dependencies, and start again on the same port without asking for
+     the password again (it's still in this process's environment).
+
+Data (database, backups, .env) lives in the per-user data folder from
+app/paths.py, not in this install folder; older installs are moved there once.
 """
 
 from __future__ import annotations
 
 import getpass
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +34,7 @@ import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 
 def _find_free_port(preferred: int = 8000) -> int:
@@ -105,10 +114,46 @@ def _maybe_self_update() -> None:
     os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
 
 
+def _clear_quarantine() -> None:
+    """macOS: drop the "downloaded from the internet" flag from the app folder so
+    replaced files (after an update or a manual re-download) don't send you back
+    to Privacy & Security to allow the launcher again."""
+    if sys.platform == "darwin" and shutil.which("xattr"):
+        subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(ROOT)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def _restart(port: int) -> None:
+    """Start a fresh copy of this launcher in place (new code + dependencies),
+    on the same port, without re-prompting or opening another browser tab."""
+    os.environ.update(KFO_PORT=str(port), KFO_NO_BROWSER="1", KFO_UPDATED="1")
+    uv = shutil.which("uv")
+    if uv:
+        print("   Installing any new dependencies…")
+        subprocess.run([uv, "sync", "--frozen"], cwd=ROOT, check=False)
+        cmd = [uv, "run", "--frozen", "python", str(Path(__file__).resolve())]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve())]
+    print("   Restarting…\n")
+    if os.name == "nt":     # execv doesn't replace the console process on Windows
+        raise SystemExit(subprocess.call(cmd, cwd=ROOT))
+    os.execv(cmd[0], cmd)
+
+
 def main() -> None:
     os.chdir(ROOT)  # so a relative KFO_DB_PATH resolves under the app folder
+    _clear_quarantine()
 
-    db_path = os.environ.get("KFO_DB_PATH", "data/family_office.db")
+    from app.paths import default_db_path, migrate_legacy_data
+    try:
+        for line in migrate_legacy_data(ROOT):
+            print(f"📁 {line}")
+    except OSError as exc:
+        print(f"\n❌ Couldn't move your data to the new data folder: {exc}")
+        print("   Nothing was changed. Free some disk space and try again.")
+        raise SystemExit(1)
+
+    db_path = os.environ.get("KFO_DB_PATH") or default_db_path()
     db_exists = Path(db_path).exists()
 
     if not os.environ.get("KFO_MASTER_PASSWORD"):
@@ -156,8 +201,20 @@ def main() -> None:
     ).start()
 
     import uvicorn
+    from app.services import restart
 
-    uvicorn.run("app.main:app", host=host, port=port, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config("app.main:app", host=host, port=port, log_level="warning"))
+    restart_requested = threading.Event()
+
+    def _stop_for_restart() -> None:
+        restart_requested.set()
+        server.should_exit = True
+
+    restart.register(_stop_for_restart)
+    server.run()
+    if restart_requested.is_set():
+        print("\n⬆️  Update installed.")
+        _restart(port)
 
 
 if __name__ == "__main__":

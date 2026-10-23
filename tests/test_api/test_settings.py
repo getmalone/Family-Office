@@ -164,4 +164,5 @@ def test_upload_update_endpoint_reports_the_result(test_client, monkeypatch):
                         lambda data: (False, "that file isn't a Family Office bundle"))
     r = test_client.post("/settings/upload-update",
                          files={"file": ("junk.zip", b"nope", "application/zip")})
-    assert r.json() == {"ok": False, "message": "that file isn't a Family Office bundle"}
+    assert r.json() == {"ok": False, "message": "that file isn't a Family Office bundle",
+                        "restarting": False}

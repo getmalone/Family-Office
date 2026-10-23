@@ -48,9 +48,12 @@ async def upload_update(file: UploadFile = File(...)):
     """
     from app.services import updater
 
+    from app.services import restart
+
     data = await file.read()
     ok, message = updater.apply_bundle_file(data)
-    return JSONResponse({"ok": ok, "message": message},
+    restarting = ok and restart.request_restart()
+    return JSONResponse({"ok": ok, "message": message, "restarting": restarting},
                         headers={"Cache-Control": "no-store"})
 
 
@@ -106,10 +109,11 @@ def apply_update_now():
     """Install the available update in place.
 
     Zip installs download the latest GitHub Release bundle and swap the code
-    (data/.env/.venv untouched); git installs check out the tag. Either way the
-    user relaunches to finish — the launcher re-syncs dependencies.
+    (data/.env/.venv untouched); git installs check out the tag. When the
+    desktop launcher is running the app it then restarts it in place;
+    otherwise the user relaunches.
     """
-    from app.services import updater
+    from app.services import restart, updater
 
     status = updater.get_update_status(fetch=True)
     if not status["update_available"]:
@@ -118,8 +122,10 @@ def apply_update_now():
         ok, msg = updater.apply_update(status["latest"])
     else:
         ok, msg = updater.apply_manual_update()
+    restarting = ok and restart.request_restart()
     return JSONResponse(
-        {"ok": ok, "message": msg, "restart_required": ok},
+        {"ok": ok, "message": msg, "restart_required": ok and not restarting,
+         "restarting": restarting},
         status_code=200 if ok else 500,
         headers={"Cache-Control": "no-store"},
     )
