@@ -140,9 +140,41 @@ def _restart(port: int) -> None:
     os.execv(cmd[0], cmd)
 
 
+# Packages the app imports lazily (so a broken install only shows up when a
+# feature is used). Checked at launch; a failure triggers one clean reinstall.
+_HEALTH_IMPORTS = "import anthropic, langchain_anthropic, numpy, pandas, sqlalchemy, uvicorn"
+
+
+def _ensure_packages_healthy() -> None:
+    """Reinstall the locked packages once if any fail to import — e.g. files
+    left half-written by an interrupted install show up as a confusing
+    'partially initialized module (circular import)' error much later."""
+    if os.environ.get("KFO_PACKAGES_REPAIRED"):
+        return
+    check = subprocess.run([sys.executable, "-c", _HEALTH_IMPORTS], cwd=ROOT,
+                           capture_output=True, text=True)
+    if check.returncode == 0:
+        return
+    uv = shutil.which("uv")
+    print("⚠️  Some of the app's Python packages are damaged:")
+    print("   " + (check.stderr.strip().splitlines() or ["unknown error"])[-1])
+    if not uv:
+        print("   Reinstall them with:  uv sync --frozen --reinstall\n")
+        return
+    print("   Reinstalling them (one time, needs internet)…")
+    subprocess.run([uv, "sync", "--frozen", "--reinstall"], cwd=ROOT, check=False)
+    os.environ["KFO_PACKAGES_REPAIRED"] = "1"
+    cmd = [uv, "run", "--frozen", "python", str(Path(__file__).resolve())]
+    print("   Done — starting the app.\n")
+    if os.name == "nt":
+        raise SystemExit(subprocess.call(cmd, cwd=ROOT))
+    os.execv(cmd[0], cmd)
+
+
 def main() -> None:
     os.chdir(ROOT)  # so a relative KFO_DB_PATH resolves under the app folder
     _clear_quarantine()
+    _ensure_packages_healthy()
 
     from app.paths import default_db_path, migrate_legacy_data
     try:

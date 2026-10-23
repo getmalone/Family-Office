@@ -109,6 +109,17 @@ def _model() -> str:
     return settings.screenshot_model
 
 
+def _import_anthropic():
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise ScreenshotImportError(
+            "The app's Python packages look damaged, so Claude can't be reached. Quit the app "
+            "and relaunch it — the launcher repairs them automatically (or run "
+            "'uv sync --frozen --reinstall' in the app folder).") from exc
+    return anthropic
+
+
 def validate_images(files: list[tuple[bytes, str]]) -> None:
     if not files:
         raise ScreenshotImportError("Choose at least one screenshot.")
@@ -131,7 +142,7 @@ def extract_positions(files: list[tuple[bytes, str]], client=None) -> dict:
             raise ScreenshotImportError(
                 "Add your Anthropic API key in Settings (the same key the AI assistant uses) "
                 "to read screenshots.")
-        import anthropic
+        anthropic = _import_anthropic()
         client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=2)
 
     content: list[dict] = []
@@ -142,7 +153,7 @@ def extract_positions(files: list[tuple[bytes, str]], client=None) -> dict:
             "data": base64.standard_b64encode(data).decode("ascii")}})
     content.append({"type": "text", "text": "Extract this account's holdings."})
 
-    import anthropic
+    anthropic = _import_anthropic()
     try:
         response = client.messages.create(
             model=_model(),
