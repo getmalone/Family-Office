@@ -26,8 +26,8 @@
           <div class="flex flex-wrap items-end gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-700">Accumulation Years</label>
-              <select name="years" class="mt-1 rounded-md border px-3 py-2 text-sm">
-                {% for y in [0, 3, 5, 7, 10, 15, 20] %}
+              <select name="years" id="mc-years" class="mt-1 rounded-md border px-3 py-2 text-sm">
+                {% for y in ([0, 3, 5, 7, 10, 15, 20] + [years]) | unique | sort %}
                 <option value="{{ y }}" {% if years == y %}selected{% endif %}>{{ y }} years</option>
                 {% endfor %}
               </select>
@@ -304,6 +304,21 @@
     </div>
 
     <script>
+    // Ages override Accumulation Years — mirror that in the dropdown as they're typed.
+    (function () {
+      const f = document.getElementById('mc-form');
+      const sel = document.getElementById('mc-years');
+      const sync = () => {
+        const ca = parseInt(f.elements['current_age'].value, 10);
+        const ra = parseInt(f.elements['retirement_age'].value, 10);
+        if (isNaN(ca) || isNaN(ra)) return;
+        const y = String(Math.max(0, ra - ca));
+        if (![...sel.options].some(o => o.value === y)) sel.add(new Option(y + ' years', y));
+        sel.value = y;
+      };
+      ['current_age', 'retirement_age'].forEach(n => f.elements[n].addEventListener('input', sync));
+    })();
+
     async function solveMaxSpending() {
       const f = document.getElementById('mc-form');
       const out = document.getElementById('ms-result');
@@ -314,7 +329,8 @@
       p.set('withdrawal_years', g('withdrawal_years') || '30');
       p.set('spending_pattern', g('spending_pattern') || 'constant');
       ['smile_slow_pct','smile_no_pct','monthly_contribution','regime_override',
-       'years','current_age','retirement_age','ssa_claiming_age','ssa_monthly'].forEach(n => {
+       'years','current_age','retirement_age','ssa_claiming_age','ssa_monthly','fra_age',
+       'spouse_monthly','spouse_claiming_age','spouse_current_age','spouse_fra_age'].forEach(n => {
         if (g(n)) p.set(n, g(n));
       });
       out.innerHTML = 'Calculating…';

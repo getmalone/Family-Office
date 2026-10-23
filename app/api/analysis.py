@@ -273,6 +273,11 @@ def monte_carlo_page(
     """Monte Carlo simulation page."""
     svc = AnalysisService(db)
 
+    # Ages override the Accumulation Years dropdown (the service does the same),
+    # so echo the derived value back to keep the form in sync with the engine.
+    if current_age is not None and retirement_age is not None:
+        years = max(0, retirement_age - current_age)
+
     def _to_decimal(s: str | None) -> Decimal | None:
         if s and s.strip():
             try:
@@ -409,6 +414,11 @@ def api_max_spending(
     retirement_age: int | None = Query(None, ge=30, le=100),
     ssa_claiming_age: int | None = Query(None, ge=62, le=70),
     ssa_monthly: str | None = Query(None),
+    fra_age: int = Query(67, ge=66, le=67),
+    spouse_monthly: str | None = Query(None),
+    spouse_claiming_age: int | None = Query(None, ge=62, le=70),
+    spouse_current_age: int | None = Query(None, ge=18, le=100),
+    spouse_fra_age: int = Query(67, ge=66, le=67),
     db: Session = Depends(get_db),
 ):
     """Highest sustainable spending that keeps survival ≥ target (%) — JSON."""
@@ -439,6 +449,11 @@ def api_max_spending(
         retirement_age=retirement_age,
         ssa_claiming_age=ssa_claiming_age,
         ssa_monthly_fra=_to_decimal(ssa_monthly) or Decimal("0"),
+        fra_age=fra_age,
+        spouse_monthly_fra=_to_decimal(spouse_monthly) or Decimal("0"),
+        spouse_claiming_age=spouse_claiming_age,
+        spouse_current_age=spouse_current_age,
+        spouse_fra_age=spouse_fra_age,
         target_survival=target,
     )
     return JSONResponse(content=result.model_dump(mode="json"))

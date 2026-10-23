@@ -973,6 +973,11 @@ class AnalysisService:
         retirement_age: int | None = None,
         ssa_claiming_age: int | None = None,
         ssa_monthly_fra: Decimal = Decimal("0"),
+        fra_age: int = 67,
+        spouse_monthly_fra: Decimal = Decimal("0"),
+        spouse_claiming_age: int | None = None,
+        spouse_current_age: int | None = None,
+        spouse_fra_age: int = 67,
         target_survival: float = 85.0,
         max_rate: float = 20.0,
     ) -> "MaxSpendingResult":
@@ -992,14 +997,26 @@ class AnalysisService:
         if current_age is not None and retirement_age is not None:
             years = max(0, int(retirement_age) - int(current_age))
 
-        ssa_annual = 0.0
         ssa_factor: float | None = None
         if (ssa_monthly_fra and float(ssa_monthly_fra) > 0
                 and ssa_claiming_age is not None and retirement_age is not None):
-            ssa_factor = self._ssa_claiming_factor(int(ssa_claiming_age))
-            ssa_annual = float(ssa_monthly_fra) * 12.0 * ssa_factor
+            ssa_factor = self._ssa_claiming_factor(int(ssa_claiming_age), int(fra_age))
 
         wy = int(withdrawal_years)
+        # Same household (one- or two-earner) schedule as run_monte_carlo, so the
+        # solver sees both checks during the joint lifetime, not just the primary's.
+        ssa_schedule, ssa_household = self._household_ssa(
+            withdrawal_years=wy,
+            accumulation_years=years,
+            retirement_age=int(retirement_age) if retirement_age is not None else None,
+            primary_monthly_fra=float(ssa_monthly_fra),
+            primary_claiming_age=int(ssa_claiming_age) if ssa_claiming_age is not None else None,
+            primary_fra_age=int(fra_age),
+            spouse_monthly_fra=float(spouse_monthly_fra),
+            spouse_claiming_age=int(spouse_claiming_age) if spouse_claiming_age is not None else None,
+            spouse_current_age=int(spouse_current_age) if spouse_current_age is not None else None,
+            spouse_fra_age=int(spouse_fra_age),
+        )
         ca = int(current_age) if current_age is not None else None
         ra = int(retirement_age) if retirement_age is not None else None
         sca = int(ssa_claiming_age) if ssa_claiming_age is not None else None
@@ -1014,7 +1031,8 @@ class AnalysisService:
                 spending_pattern=spending_pattern,
                 smile_slow_pct=smile_slow_pct, smile_no_pct=smile_no_pct,
                 current_age=ca, retirement_age=ra, ssa_claiming_age=sca,
-                ssa_annual_benefit=ssa_annual, ssa_fra_factor=ssa_factor,
+                ssa_fra_factor=ssa_factor,
+                ssa_schedule=ssa_schedule, ssa_household=ssa_household,
             )
 
         def _survival(rate: float) -> float:
@@ -1332,6 +1350,7 @@ class AnalysisService:
                 "own_monthly": float(monthly_fra) * factor,
                 "active": active,
                 "start": next((y for y, a in enumerate(active) if a), None),
+                "age_at": age_at,
             }
 
         pri = (_person(primary_monthly_fra, primary_claiming_age, primary_fra_age,
@@ -1340,14 +1359,22 @@ class AnalysisService:
                        lambda y: spouse_current_age + accumulation_years + y) if spouse_on else None)
 
         # Spousal top-up for the lower-FRA earner (only when both participate).
+        # SSA rule: the "spousal excess" is 50% of the higher earner's PIA minus
+        # the lower earner's own PIA (both unreduced), and only that excess gets
+        # the spousal reduction — based on the lower earner's age when the
+        # top-up actually starts (i.e. once the higher earner has also filed).
+        # E.g. PIAs 4,100/1,900, spouse at 62 (FRA 67): (2,050 − 1,900) × 65% = 97.50.
         topup_monthly, topup_target = 0.0, None
         if pri and spo:
             higher, lower, topup_target = (
                 (pri, spo, "spouse") if pri["monthly_fra"] >= spo["monthly_fra"]
                 else (spo, pri, "primary"))
-            spousal_entitlement = 0.5 * higher["monthly_fra"] * self._ssa_spousal_factor(
-                lower["claiming_age"], lower["fra_age"])
-            topup_monthly = max(0.0, spousal_entitlement - lower["own_monthly"])
+            excess = max(0.0, 0.5 * higher["monthly_fra"] - lower["monthly_fra"])
+            both_start = next((y for y in range(withdrawal_years)
+                               if higher["active"][y] and lower["active"][y]), None)
+            topup_age = (max(lower["claiming_age"], lower["age_at"](both_start))
+                         if both_start is not None else lower["claiming_age"])
+            topup_monthly = excess * self._ssa_spousal_factor(topup_age, lower["fra_age"])
 
         # Per-year household annual benefit.
         ssa_per_year = [0.0] * withdrawal_years
