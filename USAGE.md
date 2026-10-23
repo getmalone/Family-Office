@@ -46,7 +46,7 @@ It also works offline for pages you've already opened.
 
 ## 2. Getting your data in (ingestion)
 
-A brand-new database is empty. There are two ways to populate it.
+A brand-new database is empty. There are three ways to populate it.
 
 ### A) Bulk import from a file — CSV, JSON, or XML
 
@@ -140,7 +140,28 @@ account for good, deactivate it first, then use the 🗑 button — it deletes t
 account with every position and trade in it, cannot be undone, and takes a
 database backup first.
 
-### B) Enter data by hand
+### B) Import an account from screenshots
+
+If your broker has no convenient export, go to **Settings → Import an account
+from screenshots**:
+
+1. Take screenshots of one account's positions page, covering every holding:
+   scroll and take as many as needed, up to 10 images of 5 MB each.
+2. Upload them all together and click **Read screenshots**. Claude reads them
+   as one account, merging holdings that appear in overlapping screenshots.
+3. Review the table. Rows highlighted in amber need checking: blurry digits, a
+   missing quantity, or quantity × price that doesn't match the market value.
+   Edit any cell, untick rows you don't want, and set the account (an existing
+   one, or a new name and type). Leave cost basis blank if it isn't shown; the
+   holding is then recorded at today's price.
+4. Click **Import checked positions**. As with file imports, this replaces that
+   account's previously imported positions.
+
+This needs the Anthropic API key from Settings (the one the AI assistant uses).
+The images go to Anthropic's API and are never saved by the app. Only the last
+4 digits of the account number are kept.
+
+### C) Enter data by hand
 
 Prefer to type it in? Use the app's screens directly:
 - **Portfolio → Accounts → Manage Accounts** to add accounts.

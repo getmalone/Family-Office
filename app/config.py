@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     llm_provider: str = "anthropic"
     llm_model: str = "claude-sonnet-4-20250514"
+    screenshot_model: str = "claude-opus-5-5"   # reads account screenshots (Settings → import)
 
     # Market Data
     market_data_cache_ttl_minutes: int = 15
