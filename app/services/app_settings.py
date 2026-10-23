@@ -47,19 +47,35 @@ def apply_to_runtime(key: str, value: str) -> None:
         setattr(runtime_settings, key, value)
 
 
-def load_into_settings(session: Session) -> None:
-    """At startup, fill blank Settings attributes from the database.
+PLACEHOLDER_KEYS = {"sk-ant-...", "your-anthropic-api-key-here", "sk-ant-xxx", "changeme"}
 
-    Environment variables win: a value is only applied when the current setting
-    is empty (i.e. not provided via KFO_* / .env).
+
+def is_placeholder(value: str | None) -> bool:
+    v = (value or "").strip()
+    return not v or v in PLACEHOLDER_KEYS or v.endswith("...")
+
+
+def load_into_settings(session: Session) -> None:
+    """At startup, apply values saved in Settings (the encrypted DB).
+
+    A value saved in Settings is the user's latest explicit choice, so it beats
+    a ``.env`` file (which may still hold an old key or the example
+    placeholder). Only a real ``KFO_*`` environment variable set in the shell
+    still wins over it.
     """
+    import os
+
     try:
         rows = session.query(AppSetting).all()
     except Exception:
         return  # table may not exist yet on a brand-new database
     for row in rows:
-        if row.key in EDITABLE_KEYS and row.value and not getattr(runtime_settings, row.key, ""):
-            apply_to_runtime(row.key, row.value)
+        if row.key not in EDITABLE_KEYS or not row.value:
+            continue
+        if os.environ.get(f"KFO_{row.key.upper()}", "").strip() and not is_placeholder(
+                os.environ.get(f"KFO_{row.key.upper()}")):
+            continue
+        apply_to_runtime(row.key, row.value)
 
 
 def masked_settings(session: Session) -> dict[str, str]:

@@ -88,7 +88,10 @@ async def portfolio_advice(
     from pathlib import Path
     from app.config import settings
 
-    api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    from app.services.app_settings import is_placeholder
+
+    api_key = next((k.strip() for k in (settings.anthropic_api_key, os.environ.get("ANTHROPIC_API_KEY", ""))
+                    if not is_placeholder(k)), "")
 
     # Last-resort: read directly from the .env files (data folder wins)
     from app.paths import env_files
@@ -100,7 +103,7 @@ async def portfolio_advice(
             line = line.strip()
             if line.startswith("KFO_ANTHROPIC_API_KEY="):
                 val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val and val != "your-anthropic-api-key-here":
+                if not is_placeholder(val):
                     api_key = val
                     break
 

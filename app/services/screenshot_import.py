@@ -99,9 +99,23 @@ class ScreenshotImportError(Exception):
     """A user-facing problem reading the screenshots."""
 
 
-def _api_key() -> str:
+def _api_key_and_source() -> tuple[str, str]:
+    """The key to use and where it came from (shown if Anthropic rejects it).
+    Placeholders like the example file's ``sk-ant-...`` don't count."""
     from app.config import settings
-    return settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    from app.services.app_settings import is_placeholder
+
+    key = (settings.anthropic_api_key or "").strip()
+    if not is_placeholder(key):
+        return key, "Settings / .env"
+    env = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not is_placeholder(env):
+        return env, "the ANTHROPIC_API_KEY environment variable"
+    return "", ""
+
+
+def _api_key() -> str:
+    return _api_key_and_source()[0]
 
 
 def _model() -> str:
@@ -168,7 +182,11 @@ def extract_positions(files: list[tuple[bytes, str]], client=None) -> dict:
             extra_body={"fallbacks": "default"},
         )
     except anthropic.AuthenticationError:
-        raise ScreenshotImportError("The Anthropic API key was rejected — check it in Settings.")
+        key, source = _api_key_and_source()
+        hint = f" (the key ending …{key[-4:]}, from {source})" if key and len(key) > 8 else ""
+        raise ScreenshotImportError(
+            f"Anthropic rejected the API key{hint}. Paste a current key from "
+            "console.anthropic.com in Settings and save.")
     except anthropic.RateLimitError:
         raise ScreenshotImportError("Anthropic's API is rate-limiting requests — try again in a minute.")
     except anthropic.BadRequestError as exc:
