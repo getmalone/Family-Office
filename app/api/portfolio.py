@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -167,7 +167,10 @@ def execute_trade(
         txn = svc.execute_buy(account_id, asset_id, qty, ppu, notes=notes)
         acct_svc.auto_journal_for_trade(txn)
     elif action == "sell":
-        txn, _ = svc.execute_sell(account_id, asset_id, qty, ppu, notes=notes)
+        try:
+            txn, _ = svc.execute_sell(account_id, asset_id, qty, ppu, notes=notes)
+        except ValueError as exc:          # e.g. selling more than is held (nothing written)
+            return PlainTextResponse(str(exc), status_code=400)
         acct_svc.auto_journal_for_trade(txn)
 
     return RedirectResponse(url="/portfolio/", status_code=303)

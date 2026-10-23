@@ -14,7 +14,9 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.models.report import ComplianceFlag, GeneratedReport
-from app.models.tax_lot import TaxLotDisposal
+from app.models.account import Account
+from app.models.asset import Asset
+from app.models.tax_lot import TaxLot, TaxLotDisposal
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.reporting import ComplianceFlagOut, ReportOut
 
@@ -89,19 +91,27 @@ class ReportingService:
         year_start = date(tax_year, 1, 1)
         year_end = date(tax_year, 12, 31)
 
+        # Taxable accounts only: sales inside IRAs/401(k)s aren't reported.
         disposals = (
             self.session.query(TaxLotDisposal)
+            .join(TaxLot, TaxLotDisposal.tax_lot_id == TaxLot.id)
+            .join(Account, TaxLot.account_id == Account.id)
             .filter(
+                Account.is_taxable == True,
                 TaxLotDisposal.disposal_date >= year_start,
                 TaxLotDisposal.disposal_date <= year_end,
             )
             .all()
         )
 
+        def _adjusted(d) -> Decimal:
+            # Form 8949 column (h): gain/loss after the wash-sale adjustment (code W).
+            return d.realized_gain_loss + (d.wash_sale_disallowed or Decimal("0"))
+
         form_8949_rows = []
         for d in disposals:
-            lot = d.tax_lot
-            asset = lot.asset if lot else None
+            lot = self.session.get(TaxLot, d.tax_lot_id)
+            asset = self.session.get(Asset, lot.asset_id) if lot else None
             form_8949_rows.append({
                 "description": asset.name if asset else "Unknown",
                 "symbol": asset.symbol if asset else None,
@@ -112,6 +122,7 @@ class ReportingService:
                 "gain_loss": str(d.realized_gain_loss),
                 "is_short_term": d.is_short_term,
                 "wash_sale_adjustment": str(d.wash_sale_disallowed) if d.is_wash_sale else "0",
+                "adjusted_gain_loss": str(_adjusted(d)),
             })
 
         content = {
@@ -119,21 +130,17 @@ class ReportingService:
             "form_8949": form_8949_rows,
             "totals": {
                 "short_term_gain": str(sum(
-                    d.realized_gain_loss for d in disposals
-                    if d.is_short_term and d.realized_gain_loss > 0
-                )),
+                    (_adjusted(d) for d in disposals if d.is_short_term and _adjusted(d) > 0),
+                    Decimal("0"))),
                 "short_term_loss": str(sum(
-                    d.realized_gain_loss for d in disposals
-                    if d.is_short_term and d.realized_gain_loss < 0
-                )),
+                    (_adjusted(d) for d in disposals if d.is_short_term and _adjusted(d) < 0),
+                    Decimal("0"))),
                 "long_term_gain": str(sum(
-                    d.realized_gain_loss for d in disposals
-                    if not d.is_short_term and d.realized_gain_loss > 0
-                )),
+                    (_adjusted(d) for d in disposals if not d.is_short_term and _adjusted(d) > 0),
+                    Decimal("0"))),
                 "long_term_loss": str(sum(
-                    d.realized_gain_loss for d in disposals
-                    if not d.is_short_term and d.realized_gain_loss < 0
-                )),
+                    (_adjusted(d) for d in disposals if not d.is_short_term and _adjusted(d) < 0),
+                    Decimal("0"))),
             },
         }
 
