@@ -157,9 +157,10 @@
         <p class="text-xs text-gray-400 mt-2 max-w-3xl">
           Enter each person's estimated monthly benefit at their full retirement age (from the SSA
           statement), adjusted for the claiming age you pick. The lower earner is automatically topped up
-          toward <strong>50% of the higher earner's benefit</strong> (spousal), the survivor keeps the
-          larger of the two, and the income bridge nets both streams against the pre-SSA gap. Set FRA to
-          66 for anyone born before 1960.
+          toward <strong>50% of the higher earner's benefit</strong> (spousal), and the income bridge nets both streams against the pre-SSA gap. Each benefit starts
+          when that person reaches their own claiming age. The projection assumes both spouses live through
+          the plan; the survivor figure is shown for reference. FRA is 67 for anyone born 1960 or later and
+          66 for 1943–1954; for 1955–1959 (66 and 2–10 months) pick 67 for a slightly conservative estimate.
         </p>
       </div>
 
@@ -343,7 +344,7 @@
           '<div class="mt-1 text-2xl font-bold text-indigo-700"><span class="bal">' + fmt(d.annual_amount) + '</span>/yr ' +
           '<span class="text-base font-medium text-gray-500">(<span class="bal">' + fmt(d.monthly_amount) + '</span>/mo)</span></div>' +
           '<div class="text-xs text-gray-500 mt-1">≈ ' + d.max_withdrawal_rate + '% withdrawal rate · achieved survival ' + d.achieved_survival + '%' +
-          (Number(d.ssa_annual_benefit) ? ' · plus Social Security ' + fmt(d.ssa_annual_benefit) + '/yr' : '') + '</div>' +
+          (Number(d.ssa_annual_benefit) ? ' · plus Social Security up to ' + fmt(d.ssa_annual_benefit) + '/yr once every check has started' : '') + '</div>' +
           '</div>';
       } catch (e) {
         out.innerHTML = '<span class="text-red-600">Could not calculate — please try again.</span>';
@@ -506,6 +507,7 @@
         {# Household Social Security — two earners (spousal + survivor) #}
         {% if r.ssa_household %}
         {% set hh = r.ssa_household %}
+        {% macro usd(x) %}{{ "{:,.0f}".format(x) if x == x | round else "{:,.2f}".format(x) }}{% endmacro %}
         <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 mb-3">
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs font-semibold text-sky-700 uppercase tracking-wide">👫 Household Social Security</span>
@@ -516,10 +518,10 @@
             <div class="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5">
               <div class="flex items-center gap-2">
                 <span class="font-medium text-gray-700">{{ p.label }}</span>
-                <span class="text-xs text-gray-400">claims {{ p.claiming_age }} · {{ (p.fra_factor * 100) | round | int }}% of FRA{% if p.fra_age != 67 %} · FRA {{ p.fra_age }}{% endif %}</span>
+                <span class="text-xs text-gray-400">{{ 'claim' if p.label == 'You' else 'claims' }} {{ p.claiming_age }} · {{ (p.fra_factor * 100) | round | int }}% of FRA{% if p.fra_age != 67 %} · FRA {{ p.fra_age }}{% endif %}{% if p.starts_plan_year %} · starts plan yr {{ p.starts_plan_year }}{% if r.retirement_age %} (your age {{ r.retirement_age + p.starts_plan_year - 1 }}){% endif %}{% endif %}</span>
               </div>
               <div class="text-xs text-right">
-                <span class="bal font-semibold text-sky-700">${{ "{:,.0f}".format(p.monthly_benefit) }}</span>/mo{% if p.spousal_monthly_benefit and p.spousal_monthly_benefit > 0 %} <span class="text-emerald-600">(incl ${{ "{:,.0f}".format(p.spousal_monthly_benefit) }} spousal)</span>{% endif %}
+                <span class="bal font-semibold text-sky-700">${{ usd(p.monthly_benefit) }}</span>/mo{% if p.spousal_monthly_benefit and p.spousal_monthly_benefit > 0 %} <span class="text-emerald-600">(incl ${{ usd(p.spousal_monthly_benefit) }} spousal)</span>{% endif %}
               </div>
             </div>
             {% endfor %}
@@ -530,8 +532,16 @@
             <strong>{{ r.bridge_years }}</strong> retirement year{{ 's' if r.bridge_years != 1 }} before the first Social Security check begins.
           </div>
           {% endif %}
+          {% if hh.phases | length > 1 %}
+          <div class="text-xs text-gray-600 mt-2 space-y-0.5">
+            {% for ph in hh.phases %}
+            <div>Plan yr {{ ph.from_plan_year }}{% if loop.last %}+{% elif ph.to_plan_year != ph.from_plan_year %}–{{ ph.to_plan_year }}{% endif %}{% if r.retirement_age %} (your age {{ r.retirement_age + ph.from_plan_year - 1 }}{% if loop.last %}+{% elif ph.to_plan_year != ph.from_plan_year %}–{{ r.retirement_age + ph.to_plan_year - 1 }}{% endif %}){% endif %}:
+              <span class="bal font-semibold text-gray-700">${{ "{:,.0f}".format(ph.annual_benefit) }}</span>/yr{% if not loop.last %} — portfolio covers the rest{% endif %}</div>
+            {% endfor %}
+          </div>
+          {% endif %}
           <div class="text-xs text-gray-500 mt-2">
-            🕊️ If one spouse passes, the survivor keeps the larger benefit:
+            🕊️ If the higher earner passes first, the survivor (at their full retirement age) receives:
             <span class="bal font-semibold text-gray-700">${{ "{:,.0f}".format(hh.survivor_annual_benefit) }}</span>/yr.
           </div>
         </div>

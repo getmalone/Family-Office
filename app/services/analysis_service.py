@@ -34,6 +34,7 @@ from app.schemas.analysis import (
     PositionRisk,
     RebalanceAction,
     SsaHousehold,
+    SsaPhase,
     SsaPerson,
     RegimeState,
     ReturnMetrics,
@@ -1325,7 +1326,8 @@ class AnalysisService:
         their own age (62–70) with the standard reduction/delayed-credit factor;
         the lower earner gets a spousal top-up toward 50% of the higher earner's
         FRA benefit (reduced if claimed early, payable only once the higher
-        earner has also claimed); the survivor keeps the larger of the two.
+        earner has also claimed); the survivor gets the deceased higher earner's
+        benefit, floored at 82.5% of their PIA (the widow(er)'s limit).
 
         Returns (annual $ per distribution year, summary). The summary is None
         when there's no spouse, so the single-stream behavior is unchanged.
@@ -1399,19 +1401,38 @@ class AnalysisService:
                 own_monthly_benefit=_dec(p["own_monthly"]), spousal_monthly_benefit=_dec(tu),
                 monthly_benefit=_dec(total_monthly), annual_benefit=_dec(total_monthly * 12.0),
                 starts_plan_year=(p["start"] + 1) if p["start"] is not None else None,
+                starts_age=p["age_at"](p["start"]) if p["start"] is not None else None,
             )
 
         household = None
         if pri and spo:
             people = [_to_person(pri, "You", topup_target == "primary"),
                       _to_person(spo, "Spouse", topup_target == "spouse")]
-            survivor_monthly = max(pri["own_monthly"], spo["own_monthly"])
+            # Survivor (higher earner dies first, survivor at their own FRA): the
+            # deceased's actual benefit, but never less than 82.5% of their PIA
+            # when they had claimed early (the widow(er)'s limit); the survivor
+            # keeps their own benefit instead if that's larger.
+            higher = pri if pri["monthly_fra"] >= spo["monthly_fra"] else spo
+            lower = spo if higher is pri else pri
+            widow_monthly = (max(higher["own_monthly"], 0.825 * higher["monthly_fra"])
+                             if higher["factor"] < 1.0 else higher["own_monthly"])
+            survivor_monthly = max(widow_monthly, lower["own_monthly"])
             first = next((y for y in range(withdrawal_years) if ssa_per_year[y] > 0), None)
+            # Runs of equal household income, so staggered claim dates are visible
+            # (e.g. one check for two years before the second starts).
+            phases: list[SsaPhase] = []
+            for y in range(first if first is not None else withdrawal_years, withdrawal_years):
+                if phases and float(phases[-1].annual_benefit) == round(ssa_per_year[y], 2):
+                    phases[-1].to_plan_year = y + 1
+                else:
+                    phases.append(SsaPhase(from_plan_year=y + 1, to_plan_year=y + 1,
+                                           annual_benefit=_dec(ssa_per_year[y])))
             household = SsaHousehold(
                 people=people,
                 combined_annual_benefit=_dec(max(ssa_per_year) if withdrawal_years else 0.0),
                 survivor_annual_benefit=_dec(survivor_monthly * 12.0),
                 first_benefit_plan_year=(first + 1) if first is not None else None,
+                phases=phases,
             )
         return ssa_per_year, household
 

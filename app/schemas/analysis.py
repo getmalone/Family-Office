@@ -282,14 +282,23 @@ class SsaPerson(BaseModel):
     monthly_benefit: Decimal                         # total monthly once flowing (own + spousal top-up)
     annual_benefit: Decimal
     starts_plan_year: int | None = None              # distribution-year index their benefit starts (None = before retirement)
+    starts_age: int | None = None                    # this person's own age when their benefit starts
+
+
+class SsaPhase(BaseModel):
+    """A run of plan years with the same household Social Security income."""
+    from_plan_year: int                              # first plan year (1-based)
+    to_plan_year: int                                # last plan year (inclusive)
+    annual_benefit: Decimal                          # household SSA $/yr during this run
 
 
 class SsaHousehold(BaseModel):
     """Two-earner Social Security with spousal and survivor benefits."""
     people: list[SsaPerson] = []
     combined_annual_benefit: Decimal = Decimal("0")  # household total once both streams are flowing
-    survivor_annual_benefit: Decimal = Decimal("0")  # what the survivor keeps (the larger single benefit)
+    survivor_annual_benefit: Decimal = Decimal("0")  # survivor's benefit if the higher earner dies first (survivor at FRA)
     first_benefit_plan_year: int | None = None       # distribution-year index the first SSA dollar arrives
+    phases: list[SsaPhase] = []                      # household SSA by plan-year run (shows staggered starts)
 
 
 class MaxSpendingResult(BaseModel):
