@@ -5,6 +5,7 @@ Provides risk metrics, investment profile management, drift/rebalancing analysis
 and Monte Carlo simulation endpoints.
 """
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -240,6 +241,35 @@ def rebalance_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
+def _parse_budget(raw: str | None) -> list[dict] | None:
+    """Budget items from the form's JSON field: [{"name", "monthly", "fixed"}]."""
+    if not raw or not raw.strip():
+        return None
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        return None
+    out = []
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        try:
+            monthly = round(max(0.0, float(it.get("monthly") or 0)), 2)
+        except (TypeError, ValueError):
+            continue
+        name = str(it.get("name") or "").strip()[:80] or "Spending"
+        out.append({"name": name, "monthly": monthly, "fixed": bool(it.get("fixed"))})
+    return out
+
+
+def _apply_buffer(items: list[dict] | None, buffer_pct: float) -> list[dict] | None:
+    """Scale every budget line by the buffer (e.g. 10% → ×1.10)."""
+    if items is None:
+        return None
+    f = 1 + max(0.0, buffer_pct) / 100
+    return [{**it, "monthly": round(it["monthly"] * f, 2)} for it in items]
+
+
 @router.get("/monte-carlo")
 def monte_carlo_page(
     request: Request,
@@ -268,9 +298,15 @@ def monte_carlo_page(
     bucket_taxable: str | None = Query(None),       # manual override of today's taxable $ balance
     bucket_traditional: str | None = Query(None),   # manual override of tax-deferred $ balance
     bucket_roth: str | None = Query(None),          # manual override of tax-free (Roth) $ balance
+    spending_mode: str | None = Query(None),        # "rate" (withdrawal %) or "budget"; None = last used
+    budget_items: str | None = Query(None),         # JSON list of {name, monthly, fixed}
+    inflation_rate: float = Query(2.5, ge=0, le=15),  # % per year; results shown in today's dollars
+    budget_buffer: float | None = Query(None, ge=0, le=100),  # % cushion on top of the budget lines
+    reinvest_surplus: bool | None = Query(None),    # income above spending goes back into the portfolio
     db: Session = Depends(get_db),
 ):
     """Monte Carlo simulation page."""
+    from app.services import app_settings
     svc = AnalysisService(db)
 
     # Ages override the Accumulation Years dropdown (the service does the same),
@@ -295,7 +331,31 @@ def monte_carlo_page(
     wdraw_decimal   = _to_decimal(withdrawal_rate) or Decimal("0")
     wdraw_display   = float(wdraw_decimal) if wdraw_decimal else None
     # Only run distribution phase when a nonzero rate was supplied
-    wdraw_years_int = withdrawal_years if wdraw_decimal > 0 else 0
+    # Budget: the submitted one is remembered; otherwise use the saved one.
+    budget = _parse_budget(budget_items)
+    # The form always sends spending_mode, so its presence means "submitted":
+    # remember the mode, the surplus choice, and (in budget mode) the budget.
+    if spending_mode is not None:
+        app_settings.set_setting(db, "mc_spending_mode", spending_mode)
+        app_settings.set_setting(db, "mc_reinvest_surplus", "1" if reinvest_surplus else "")
+        if budget is not None:
+            app_settings.set_setting(db, "mc_budget_items", json.dumps(budget))
+        if budget_buffer is not None:
+            app_settings.set_setting(db, "mc_budget_buffer", str(budget_buffer))
+        db.commit()
+    else:
+        spending_mode = app_settings.get_setting(db, "mc_spending_mode") or "rate"
+        reinvest_surplus = bool(app_settings.get_setting(db, "mc_reinvest_surplus"))
+    reinvest_surplus = bool(reinvest_surplus)
+    if budget is None:
+        budget = _parse_budget(app_settings.get_setting(db, "mc_budget_items")) or []
+    if budget_buffer is None:
+        try:
+            budget_buffer = float(app_settings.get_setting(db, "mc_budget_buffer") or 10)
+        except ValueError:
+            budget_buffer = 10.0
+    budget_mode = spending_mode == "budget" and any(it["monthly"] > 0 for it in budget)
+    wdraw_years_int = withdrawal_years if (wdraw_decimal > 0 or budget_mode) else 0
 
     ssa_monthly_decimal = _to_decimal(ssa_monthly) or Decimal("0")
     ssa_monthly_display = float(ssa_monthly_decimal) if ssa_monthly_decimal else None
@@ -343,6 +403,9 @@ def monte_carlo_page(
         bucket_balances=bucket_overrides,
         deferred_tax_rate=deferred_tax_rate / 100.0,
         taxable_tax_rate=taxable_tax_rate / 100.0,
+        inflation_rate=inflation_rate / 100.0,
+        budget_items=_apply_buffer(budget, budget_buffer) if budget_mode else None,
+        reinvest_surplus=reinvest_surplus,
     )
 
     return templates.TemplateResponse(
@@ -375,9 +438,20 @@ def monte_carlo_page(
             "bucket_taxable": bucket_taxable,
             "bucket_traditional": bucket_traditional,
             "bucket_roth": bucket_roth,
+            "spending_mode": "budget" if spending_mode == "budget" else "rate",
+            "budget_items": budget,
+            "budget_buffer": int(budget_buffer) if float(budget_buffer).is_integer() else budget_buffer,
+            "inflation_rate": inflation_rate,
+            "reinvest_surplus": reinvest_surplus,
             "page_title": "Monte Carlo",
         },
     )
+
+
+@router.get("/api/expense-baseline")
+def api_expense_baseline(months: int = Query(12, ge=1, le=36), db: Session = Depends(get_db)):
+    """Average monthly spending per tracked expense category (budget pre-fill)."""
+    return JSONResponse(content={"items": AnalysisService(db).expense_baseline(months)})
 
 
 @router.get("/api/correlation")
@@ -425,6 +499,11 @@ def api_max_spending(
     bucket_taxable: str | None = Query(None),
     bucket_traditional: str | None = Query(None),
     bucket_roth: str | None = Query(None),
+    spending_mode: str = Query("rate"),
+    budget_items: str | None = Query(None),
+    inflation_rate: float = Query(2.5, ge=0, le=15),
+    budget_buffer: float = Query(10.0, ge=0, le=100),
+    reinvest_surplus: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Highest sustainable spending that keeps survival ≥ target (%) — JSON."""
@@ -473,6 +552,10 @@ def api_max_spending(
         bucket_balances=bucket_overrides,
         deferred_tax_rate=deferred_tax_rate / 100.0,
         taxable_tax_rate=taxable_tax_rate / 100.0,
+        inflation_rate=inflation_rate / 100.0,
+        budget_items=(_apply_buffer(_parse_budget(budget_items), budget_buffer)
+                      if spending_mode == "budget" else None),
+        reinvest_surplus=reinvest_surplus,
         target_survival=target,
     )
     return JSONResponse(content=result.model_dump(mode="json"))

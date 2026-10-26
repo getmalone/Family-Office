@@ -215,6 +215,29 @@ accumulation and retirement:
   that keeps the portfolio's survival at that target — using the same scenario
   (ages, Social Security, contributions, distribution years, spending pattern).
 
+
+**Plan by your monthly budget.** Under *Distribution*, choose **My monthly budget**
+instead of a withdrawal rate:
+- List your **fixed** costs one by one (property taxes, insurance, utilities,
+  healthcare and so on). They stay level, in today's dollars, for life.
+- Put discretionary spending (travel, dining out, hobbies) into the single
+  **Variable** amount. Only that part follows the Spending Smile step-downs.
+- **Buffer** adds a cushion on top (10% by default).
+- **Load from tracked expenses** fills the list from the last 12 months of
+  expenses recorded in the app.
+- The withdrawal rate becomes a result: year-one spending as a % of the median
+  retirement balance.
+- **Reinvest surplus.** In years when Social Security is more than your budget,
+  the extra isn't counted as spending. Tick **Reinvest surplus** to put it back
+  into the portfolio.
+- The app remembers the mode, the budget and the surplus choice.
+
+**Inflation** (default 2.5%/yr) grows spending and Social Security alike, and
+every result is shown in **today's dollars**. Set it to 0 for the old flat-dollar
+model. **Max sustainable spending** in budget mode shows the highest monthly
+budget (same fixed/variable mix) that meets your survival target, and what
+share of it your budget uses.
+
 ### AI assistant (optional)
 
 The chat bubble (bottom-right) answers questions about your portfolio, taxes, and

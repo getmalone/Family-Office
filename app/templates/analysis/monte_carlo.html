@@ -15,7 +15,7 @@
       <div>
         <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Accumulation Phase</div>
         <form id="mc-form" method="GET"
-              onsubmit="(function(f){
+              onsubmit="serializeBudget(); (function(f){
                   ['goal','monthly_contribution','withdrawal_rate',
                    'current_age','retirement_age','ssa_monthly',
                    'spouse_current_age','spouse_claiming_age','spouse_monthly',
@@ -170,8 +170,53 @@
           Distribution / Withdrawal Phase
           <span class="text-gray-300 font-normal ml-1">— starts immediately after accumulation ends</span>
         </div>
+        {# Spending mode: withdrawal rate, or an itemised budget of fixed + variable costs #}
+        <div class="flex flex-wrap items-center gap-5 mb-3 text-sm">
+          <span class="font-medium text-gray-700">Plan spending by</span>
+          <label class="flex items-center gap-1.5"><input type="radio" name="spending_mode" value="rate" form="mc-form"
+                 {% if spending_mode != 'budget' %}checked{% endif %} onchange="toggleSpendingMode()"> Withdrawal rate</label>
+          <label class="flex items-center gap-1.5"><input type="radio" name="spending_mode" value="budget" form="mc-form"
+                 {% if spending_mode == 'budget' %}checked{% endif %} onchange="toggleSpendingMode()"> My monthly budget</label>
+          <label class="flex items-center gap-1.5 ml-auto" title="Spending and Social Security grow with inflation; all results are shown in today's dollars. 0 = the old nominal model.">
+            Inflation <input type="number" name="inflation_rate" form="mc-form" value="{{ inflation_rate }}"
+                   min="0" max="15" step="0.1" class="rounded-md border px-2 py-1 text-sm w-20"> %/yr</label>
+        </div>
+
+        <div id="budget-editor" class="mb-4 rounded-lg border border-gray-200 p-3 {% if spending_mode != 'budget' %}hidden{% endif %}">
+          <input type="hidden" name="budget_items" form="mc-form" id="budget-items-json">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <p class="text-xs text-gray-500">List your <strong>fixed</strong> monthly costs in today's dollars — they stay
+              level for life. Put everything discretionary into one <strong>variable</strong> amount below.</p>
+            <button type="button" onclick="loadExpenseBaseline()" class="text-xs text-blue-600 hover:text-blue-800">
+              Load from tracked expenses (last 12 months)</button>
+          </div>
+          <table class="w-full text-sm">
+            <thead class="text-xs text-gray-500"><tr>
+              <th class="text-left font-medium py-1">Fixed cost</th><th class="text-left font-medium px-2 w-36">$/month</th>
+              <th></th></tr></thead>
+            <tbody id="budget-rows"></tbody>
+          </table>
+          <div class="flex flex-wrap items-center justify-between gap-3 mt-2 text-sm">
+            <div class="flex flex-wrap items-center gap-4">
+              <button type="button" onclick="addBudgetRow('', '')" class="text-xs text-blue-600 hover:text-blue-800">+ Add fixed cost</button>
+              <label class="text-xs text-gray-600" title="Discretionary spending (travel, dining out, hobbies) as one amount; it follows the spending smile.">Variable / discretionary
+                <input type="number" id="budget-variable" min="0" step="50" value="{{ ((budget_items or []) | rejectattr('fixed') | sum(attribute='monthly')) | round | int }}"
+                       class="rounded border px-2 py-0.5 w-24 text-right" oninput="updateBudgetTotals()"> $/mo</label>
+              <label class="text-xs text-gray-600" title="Cushion added on top of every line for unplanned costs.">Buffer
+                <input type="number" name="budget_buffer" form="mc-form" id="budget-buffer" value="{{ budget_buffer }}"
+                       min="0" max="100" step="1" class="rounded border px-2 py-0.5 w-16 text-right" oninput="updateBudgetTotals()"> %</label>
+            </div>
+            <span id="budget-totals" class="text-gray-600"></span>
+          </div>
+          <label class="mt-2 flex items-start gap-2 text-xs text-gray-600">
+            <input type="checkbox" name="reinvest_surplus" value="true" form="mc-form" class="mt-0.5" {% if reinvest_surplus %}checked{% endif %}>
+            <span><strong>Reinvest surplus</strong> — in years when Social Security is more than this budget, put the
+              extra back into the investment portfolio. Unticked, extra income isn't counted as spending or savings.</span>
+          </label>
+        </div>
+
         <div class="flex flex-wrap items-end gap-4">
-          <div>
+          <div id="rate-input">
             <label class="block text-sm font-medium text-gray-700"
                    title="Year-one spending as a % of the median portfolio value at retirement. The same dollar amount is tested in every simulation, so a poor market before or after retirement shows up as lower survival.">Annual Withdrawal Rate (%)</label>
             <input type="number" name="withdrawal_rate"
@@ -179,6 +224,70 @@
                    min="0" max="20" step="0.5" placeholder="e.g. 4.0 — leave blank to skip"
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-52">
           </div>
+          <script>
+          // ── Itemised budget editor ──
+          const BUDGET_START = {{ (budget_items or []) | selectattr('fixed') | list | tojson }};
+          const BUDGET_DEFAULTS = [["Property Taxes", 533], ["Home Insurance", 150],
+                                   ["HOA + Home Maintenance", 250], ["Utilities", 350],
+                                   ["Food & Groceries", 800], ["Healthcare", 500],
+                                   ["Transportation", 250], ["Other Insurance", 150],
+                                   ["Personal / Misc", 350]];
+          function addBudgetRow(name, monthly) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td class="py-1 pr-2"><input class="b-name w-full rounded border px-2 py-1" placeholder="Fixed cost"></td>' +
+              '<td class="py-1 px-2"><input type="number" min="0" step="10" class="b-monthly w-32 rounded border px-2 py-1 text-right" placeholder="0"></td>' +
+              '<td class="py-1 text-right"><button type="button" class="text-gray-400 hover:text-red-600 px-2" title="Remove">✕</button></td>';
+            tr.querySelector('.b-name').value = name || '';
+            tr.querySelector('.b-monthly').value = (monthly === '' || monthly == null) ? '' : monthly;
+            tr.querySelector('button').onclick = () => { tr.remove(); updateBudgetTotals(); };
+            tr.querySelectorAll('input').forEach(i => i.addEventListener('input', updateBudgetTotals));
+            document.getElementById('budget-rows').appendChild(tr);
+            updateBudgetTotals();
+          }
+          function budgetRows() {
+            const rows = [...document.querySelectorAll('#budget-rows tr')].map(tr => ({
+              name: tr.querySelector('.b-name').value.trim(),
+              monthly: parseFloat(tr.querySelector('.b-monthly').value) || 0,
+              fixed: true,
+            })).filter(r => r.name || r.monthly);
+            const variable = parseFloat(document.getElementById('budget-variable').value) || 0;
+            if (variable > 0) rows.push({name: 'Variable / discretionary', monthly: variable, fixed: false});
+            return rows;
+          }
+          function updateBudgetTotals() {
+            const rows = budgetRows();
+            const buf = 1 + (parseFloat(document.getElementById('budget-buffer').value) || 0) / 100;
+            const fmt = x => '$' + Math.round(x).toLocaleString();
+            const fixed = rows.filter(r => r.fixed).reduce((a, r) => a + r.monthly, 0);
+            const total = rows.reduce((a, r) => a + r.monthly, 0);
+            document.getElementById('budget-totals').innerHTML = 'Fixed ' + fmt(fixed) + ' + variable ' + fmt(total - fixed) +
+              ' = ' + fmt(total) + '/mo · with buffer <b>' + fmt(total * buf) + '/mo</b> (' + fmt(total * buf * 12) + '/yr)';
+          }
+          function serializeBudget() {
+            const el = document.getElementById('budget-items-json');
+            el.value = JSON.stringify(budgetRows());
+            // Rate mode leaves the saved budget alone.
+            el.disabled = !document.querySelector('input[name=spending_mode][value=budget]').checked;
+          }
+          function toggleSpendingMode() {
+            const budget = document.querySelector('input[name=spending_mode][value=budget]').checked;
+            document.getElementById('budget-editor').classList.toggle('hidden', !budget);
+            document.getElementById('rate-input').classList.toggle('hidden', budget);
+          }
+          async function loadExpenseBaseline() {
+            const d = await (await fetch('/analysis/api/expense-baseline')).json();
+            if (!d.items.length) { alert('No expenses tracked in the last 12 months.'); return; }
+            if (budgetRows().length && !confirm('Replace the current budget lines with your tracked expenses?')) return;
+            document.getElementById('budget-rows').innerHTML = '';
+            d.items.filter(it => it.fixed).forEach(it => addBudgetRow(it.name, it.monthly));
+            document.getElementById('budget-variable').value =
+              Math.round(d.items.filter(it => !it.fixed).reduce((a, it) => a + it.monthly, 0));
+            updateBudgetTotals();
+          }
+          (BUDGET_START.length ? BUDGET_START.map(r => [r.name, r.monthly]) : BUDGET_DEFAULTS)
+            .forEach(r => addBudgetRow(...r));
+          toggleSpendingMode();
+          </script>
           <div>
             <label class="block text-sm font-medium text-gray-700">Distribution Years</label>
             <select name="withdrawal_years" class="mt-1 rounded-md border px-3 py-2 text-sm">
@@ -333,9 +442,13 @@
       ['smile_slow_pct','smile_no_pct','monthly_contribution','regime_override',
        'years','current_age','retirement_age','ssa_claiming_age','ssa_monthly','fra_age',
        'spouse_monthly','spouse_claiming_age','spouse_current_age','spouse_fra_age',
-       'deferred_tax_rate','taxable_tax_rate','bucket_taxable','bucket_traditional','bucket_roth'].forEach(n => {
+       'deferred_tax_rate','taxable_tax_rate','bucket_taxable','bucket_traditional','bucket_roth',
+       'inflation_rate','budget_buffer'].forEach(n => {
         if (g(n)) p.set(n, g(n));
       });
+      const budgetMode = document.querySelector('input[name=spending_mode][value=budget]').checked;
+      if (budgetMode) { p.set('spending_mode', 'budget'); p.set('budget_items', JSON.stringify(budgetRows())); }
+      if (f.elements['reinvest_surplus'] && f.elements['reinvest_surplus'].checked) p.set('reinvest_surplus', 'true');
       const ib = f.elements['income_bridge'];
       if (ib && ib.checked) p.set('income_bridge', 'true');
       out.innerHTML = 'Calculating…';
@@ -347,7 +460,11 @@
           '<div class="text-gray-700">For <b>' + d.target_survival + '% survival</b>, the highest sustainable spending is:</div>' +
           '<div class="mt-1 text-2xl font-bold text-indigo-700"><span class="bal">' + fmt(d.annual_amount) + '</span>/yr ' +
           '<span class="text-base font-medium text-gray-500">(<span class="bal">' + fmt(d.monthly_amount) + '</span>/mo)</span></div>' +
+          (d.spending_mode === 'budget' && d.budget_pct_of_max
+            ? '<div class="text-sm text-gray-700 mt-1">Your budget of <b>' + fmt(d.budget_monthly) + '/mo</b> is <b>' + d.budget_pct_of_max +
+              '%</b> of this' + (Number(d.budget_pct_of_max) <= 100 ? ' — room to spare.' : ' — above what the target survival allows.') + '</div>' : '') +
           '<div class="text-xs text-gray-500 mt-1">≈ ' + d.max_withdrawal_rate + '% of the median retirement balance · achieved survival ' + d.achieved_survival + '%' +
+          (Number(d.inflation_rate) > 0 ? ' · today\'s dollars, ' + d.inflation_rate + '% inflation' : '') +
           (Number(d.ssa_annual_benefit) ? ' · Social Security covers up to ' + fmt(d.ssa_annual_benefit) + '/yr of this once every check has started' : '') +
           (d.income_bridge ? ' · after taxes, drawn taxable → tax-deferred → Roth' : '') + '</div>' +
           (d.target_reachable ? '' : '<div class="text-xs text-red-600 mt-1">The target survival can\'t be reached even with almost no spending from the portfolio.</div>') +
@@ -436,7 +553,10 @@
       <div class="border-t border-dashed border-orange-200 pt-4 mt-2">
         <div class="flex items-center justify-between gap-2 mb-3">
           <div class="text-xs font-semibold text-orange-600 uppercase tracking-wide">
-            Distribution Phase — {{ r.withdrawal_years }} yrs @ {{ r.withdrawal_rate }}%/yr
+            Distribution Phase — {{ r.withdrawal_years }} yrs
+            {% if r.spending_mode == 'budget' %}· budget ≈ {{ r.implied_withdrawal_rate }}% of retirement balance
+            {% else %}@ {{ r.withdrawal_rate }}%/yr{% endif %}
+            {% if r.inflation_rate and r.inflation_rate > 0 %}<span class="normal-case font-normal text-gray-400">· today's dollars, {{ r.inflation_rate }}% inflation</span>{% endif %}
           </div>
           {% if r.spending_pattern == 'smile' %}
           <span class="text-xs font-medium text-orange-500 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5">😊 Spending Smile</span>
@@ -446,8 +566,15 @@
         {# Spending Smile phase breakdown #}
         {% if r.spending_pattern == 'smile' and r.smile_go_go_years > 0 %}
         {% set no_go_years = r.withdrawal_years - r.smile_go_go_years - r.smile_slow_go_years %}
+        {% if r.spending_mode == 'budget' %}
+        {% set fixed_y = (r.spending_fixed_monthly or 0) | float * 12 %}
+        {% set var_y = (r.spending_variable_monthly or 0) | float * 12 %}
+        {% set slow_go_income = fixed_y + var_y * r.smile_slow_pct / 100 %}
+        {% set no_go_income   = fixed_y + var_y * r.smile_no_pct  / 100 %}
+        {% else %}
         {% set slow_go_income = r.withdrawal_annual_amount | float * r.smile_slow_pct / 100 %}
         {% set no_go_income   = r.withdrawal_annual_amount | float * r.smile_no_pct  / 100 %}
+        {% endif %}
         <div class="flex gap-0 mb-3 rounded-lg overflow-hidden border border-orange-100 text-xs text-center font-medium">
           <div class="flex-1 bg-green-50 py-2 px-1 border-r border-orange-100">
             <div class="text-green-700">🏃 Go-Go</div>
@@ -475,6 +602,10 @@
             </div>
             <div class="font-bold text-orange-700"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_annual_amount) }}</span>/yr</div>
             <div class="text-xs text-gray-400"><span class="bal">${{ "{:,.0f}".format(r.withdrawal_annual_amount / 12) }}</span>/mo</div>
+            {% if r.spending_mode == 'budget' %}
+            <div class="text-xs text-gray-500 mt-0.5">fixed <span class="bal">${{ "{:,.0f}".format(r.spending_fixed_monthly) }}</span>/mo
+              · variable <span class="bal">${{ "{:,.0f}".format(r.spending_variable_monthly) }}</span>/mo</div>
+            {% endif %}
           </div>
           <div class="bg-orange-50 rounded-lg p-3">
             <div class="text-xs text-gray-500 mb-0.5">Drawn from portfolio (median)</div>
