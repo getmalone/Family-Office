@@ -294,9 +294,10 @@ def monte_carlo_page(
     spouse_fra_age: int = Query(67, ge=66, le=67),
     income_bridge: bool = Query(False),     # model account-type withdrawal sequencing + taxes
     deferred_tax_rate: float = Query(18.0, ge=0, le=50),  # effective % tax on tax-deferred withdrawals
-    taxable_tax_rate: float = Query(10.0, ge=0, le=50),   # effective % cap-gains drag on taxable
+    taxable_tax_rate: float = Query(15.0, ge=0, le=50),   # effective % cap-gains drag on taxable
     bucket_taxable: str | None = Query(None),       # manual override of today's taxable $ balance
     bucket_traditional: str | None = Query(None),   # manual override of tax-deferred $ balance
+    bucket_taxable_basis: str | None = Query(None),  # cost basis of the taxable bucket (manual)
     bucket_roth: str | None = Query(None),          # manual override of tax-free (Roth) $ balance
     spending_mode: str | None = Query(None),        # "rate" (withdrawal %) or "budget"; None = last used
     budget_items: str | None = Query(None),         # JSON list of {name, monthly, fixed}
@@ -403,6 +404,8 @@ def monte_carlo_page(
         bucket_balances=bucket_overrides,
         deferred_tax_rate=deferred_tax_rate / 100.0,
         taxable_tax_rate=taxable_tax_rate / 100.0,
+        taxable_basis=(float(_to_decimal(bucket_taxable_basis)) if _to_decimal(bucket_taxable_basis) is not None
+                       else None),
         inflation_rate=inflation_rate / 100.0,
         budget_items=_apply_buffer(budget, budget_buffer) if budget_mode else None,
         reinvest_surplus=reinvest_surplus,
@@ -438,6 +441,7 @@ def monte_carlo_page(
             "bucket_taxable": bucket_taxable,
             "bucket_traditional": bucket_traditional,
             "bucket_roth": bucket_roth,
+            "bucket_taxable_basis": bucket_taxable_basis,
             "spending_mode": "budget" if spending_mode == "budget" else "rate",
             "budget_items": budget,
             "budget_buffer": int(budget_buffer) if float(budget_buffer).is_integer() else budget_buffer,
@@ -495,9 +499,10 @@ def api_max_spending(
     spouse_fra_age: int = Query(67, ge=66, le=67),
     income_bridge: bool = Query(False),
     deferred_tax_rate: float = Query(18.0, ge=0, le=50),
-    taxable_tax_rate: float = Query(10.0, ge=0, le=50),
+    taxable_tax_rate: float = Query(15.0, ge=0, le=50),
     bucket_taxable: str | None = Query(None),
     bucket_traditional: str | None = Query(None),
+    bucket_taxable_basis: str | None = Query(None),  # cost basis of the taxable bucket (manual)
     bucket_roth: str | None = Query(None),
     spending_mode: str = Query("rate"),
     budget_items: str | None = Query(None),
@@ -552,6 +557,8 @@ def api_max_spending(
         bucket_balances=bucket_overrides,
         deferred_tax_rate=deferred_tax_rate / 100.0,
         taxable_tax_rate=taxable_tax_rate / 100.0,
+        taxable_basis=(float(_to_decimal(bucket_taxable_basis)) if _to_decimal(bucket_taxable_basis) is not None
+                       else None),
         inflation_rate=inflation_rate / 100.0,
         budget_items=(_apply_buffer(_parse_budget(budget_items), budget_buffer)
                       if spending_mode == "budget" else None),

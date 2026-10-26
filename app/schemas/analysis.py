@@ -272,7 +272,9 @@ class IncomeBridge(BaseModel):
     bridge_coverage_pct: Decimal = Decimal("0")    # % of sims that fund the full bridge without depleting
     # Tax assumptions / outcome
     deferred_tax_rate: Decimal = Decimal("0")      # effective rate on tax-deferred withdrawals (%)
-    taxable_tax_rate: Decimal = Decimal("0")       # effective cap-gains drag on taxable withdrawals (%)
+    taxable_tax_rate: Decimal = Decimal("0")       # capital-gains rate on the GAIN part of taxable sales (%)
+    taxable_gain_share_pct: Decimal | None = None  # unrealized-gain share of the taxable bucket at retirement
+                                                   # (None = cost basis unknown → every dollar taxed)
     taxes_total_median: Decimal = Decimal("0")     # median lifetime tax paid on portfolio withdrawals
     funding_by_year: list[BridgeYearFunding] = []
 
