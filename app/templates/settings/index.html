@@ -53,6 +53,14 @@
         </p>
       </div>
       <div>
+        <label class="block text-sm font-medium text-gray-700">Workspace ID <span class="text-gray-400 font-normal">(optional)</span></label>
+        <input type="text" name="anthropic_workspace_id" value="{{ values.anthropic_workspace_id or '' }}"
+               placeholder="wrkspc_…" autocomplete="off"
+               class="mt-1 w-full rounded-md border px-3 py-2 text-sm">
+        <p class="text-xs text-gray-400 mt-1">Only needed if your API key isn't tied to a workspace. Find it in the
+          Claude Console under Settings → Workspaces. Leave blank for a key created inside a workspace.</p>
+      </div>
+      <div>
         <label class="block text-sm font-medium text-gray-700">Model</label>
         <input type="text" name="llm_model" value="{{ values.llm_model }}"
                placeholder="claude-sonnet-4-20250514"

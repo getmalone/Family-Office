@@ -135,9 +135,13 @@ def apply_update_now():
 def save_settings(
     db: Session = Depends(get_db),
     anthropic_api_key: str = Form(""),
+    anthropic_workspace_id: str = Form(""),
     llm_model: str = Form(""),
 ):
     """Persist settings to the encrypted DB and apply them immediately."""
+    # The workspace ID field shows its current value, so a blank submit clears it.
+    app_settings.set_setting(db, "anthropic_workspace_id", anthropic_workspace_id.strip())
+    app_settings.apply_to_runtime("anthropic_workspace_id", anthropic_workspace_id.strip())
     # Only overwrite the API key when a new value is typed (blank = keep current).
     if anthropic_api_key.strip():
         app_settings.set_setting(db, "anthropic_api_key", anthropic_api_key.strip())
