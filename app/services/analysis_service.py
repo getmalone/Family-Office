@@ -142,6 +142,34 @@ def portfolio_return_and_vol(allocation: dict[str, float]) -> tuple[float, float
     cov = np.outer(sig, sig) * corr
     return float(w @ mu), float(np.sqrt(max(float(w @ cov @ w), 0.0)))
 
+
+def budget_totals(items: list[dict] | None) -> tuple[float, float]:
+    """(fixed, variable) annual spending in today's dollars from itemised
+    monthly categories: [{"name": ..., "monthly": 1234.5, "fixed": True}, ...]."""
+    fixed = variable = 0.0
+    for it in items or []:
+        try:
+            monthly = max(0.0, float(it.get("monthly") or 0))
+        except (TypeError, ValueError):
+            continue
+        if it.get("fixed"):
+            fixed += monthly * 12
+        else:
+            variable += monthly * 12
+    return fixed, variable
+
+
+def _spending_kwargs(inflation_rate: float, budget_items: list[dict] | None,
+                     reinvest_surplus: bool = False) -> dict:
+    """_simulate kwargs for inflation, surplus handling and (when a budget is
+    given) budget mode."""
+    out: dict = {"inflation_rate": max(0.0, float(inflation_rate or 0.0)),
+                 "reinvest_surplus": bool(reinvest_surplus)}
+    fixed, variable = budget_totals(budget_items)
+    if fixed + variable > 0:
+        out.update(spending_fixed_annual=fixed, spending_variable_annual=variable)
+    return out
+
 # Default target allocations for the 5 system profiles.
 DEFAULT_PROFILES: list[dict] = [
     {
@@ -1064,6 +1092,9 @@ class AnalysisService:
         bucket_balances: dict[str, float] | None = None,
         deferred_tax_rate: float = 0.18,
         taxable_tax_rate: float = 0.10,
+        inflation_rate: float = 0.0,
+        budget_items: list[dict] | None = None,
+        reinvest_surplus: bool = False,
         target_survival: float = 85.0,
         max_rate: float = 20.0,
     ) -> "MaxSpendingResult":
@@ -1071,8 +1102,9 @@ class AnalysisService:
 
         Uses exactly the displayed run's scenario (_mc_scenario: ages, household
         SSA, income bridge, taxes, buckets). With a fixed-dollar withdrawal and
-        common random numbers, survival falls as the rate rises, so a binary
-        search finds the crossing point.
+        common random numbers, survival falls as spending rises, so a binary
+        search finds the crossing point. In budget mode it searches a scale
+        factor on the whole budget (same fixed/variable mix) instead of a rate.
         """
         from app.schemas.analysis import MaxSpendingResult
 
@@ -1087,17 +1119,24 @@ class AnalysisService:
         )
         wy = int(withdrawal_years)
         target = float(target_survival)
+        spend_kw = _spending_kwargs(inflation_rate, budget_items, reinvest_surplus)
+        budget_mode = "spending_fixed_annual" in spend_kw
+        if budget_mode:
+            # Search the budget scale k in [0, max_scale]; "rate" below means k.
+            budget_annual = spend_kw["spending_fixed_annual"] + spend_kw["spending_variable_annual"]
+            max_rate = 10.0
 
         def _sim_at(rate: float):
             return self._simulate(
                 label="solve", allocation=sc["allocation"], initial_value=sc["initial_value"],
                 years=sc["years"], num_simulations=num_simulations, goal_amount=None,
                 regime=sc["regime"], monthly_contribution=float(monthly_contribution),
-                withdrawal_rate=rate, withdrawal_years=wy,
+                withdrawal_rate=0.0 if budget_mode else rate, withdrawal_years=wy,
                 spending_pattern=spending_pattern,
                 smile_slow_pct=smile_slow_pct, smile_no_pct=smile_no_pct,
                 current_age=sc["current_age"], retirement_age=sc["retirement_age"],
                 ssa_claiming_age=sc["ssa_claiming_age"], ssa_fra_factor=sc["ssa_fra_factor"],
+                **({**spend_kw, "spending_scale": rate} if budget_mode else spend_kw),
                 **sc["shared_kwargs"],
             )
 
@@ -1123,9 +1162,19 @@ class AnalysisService:
 
         r = _sim_at(best)
         annual = r.withdrawal_annual_amount or Decimal("0")
+        budget_fields = {}
+        if budget_mode:
+            budget_fields = dict(
+                spending_mode="budget",
+                budget_monthly=Decimal(str(round(budget_annual / 12, 2))),
+                budget_pct_of_max=(Decimal(str(round(100 / best, 1))) if best > 0 else None),
+            )
         return MaxSpendingResult(
+            **budget_fields,
+            inflation_rate=Decimal(str(round(spend_kw["inflation_rate"] * 100, 2))),
             target_survival=Decimal(str(round(target, 1))),
-            max_withdrawal_rate=Decimal(str(round(best, 2))),
+            max_withdrawal_rate=(r.implied_withdrawal_rate or Decimal("0")) if budget_mode
+                                else Decimal(str(round(best, 2))),
             annual_amount=annual,
             monthly_amount=Decimal(str(round(float(annual) / 12.0, 2))),
             achieved_survival=r.portfolio_survival_rate or Decimal("0"),
@@ -1235,6 +1284,39 @@ class AnalysisService:
             ssa_fra_factor=ssa_fra_factor, shared_kwargs=shared_kwargs,
         )
 
+    _FIXED_HINTS = ("mortgage", "rent", "housing", "property tax", "tax", "insurance", "utilit",
+                    "electric", "water", "gas", "internet", "phone", "health", "medical",
+                    "premium", "hoa", "loan", "car payment", "childcare", "tuition", "subscription")
+
+    def expense_baseline(self, months: int = 12) -> list[dict]:
+        """Average monthly spending per expense category over the last ``months``
+        months, as budget items for the Monte Carlo budget mode. A category is
+        marked fixed when most of its spending is recurring or its name looks
+        like a fixed cost (housing, insurance, utilities, …); edit as needed."""
+        from app.models.expense import Expense, ExpenseCategory
+
+        since = date.today() - timedelta(days=round(months * 30.44))
+        rows = (
+            self.session.query(ExpenseCategory.name, Expense.amount, Expense.is_recurring)
+            .join(Expense, Expense.category_id == ExpenseCategory.id)
+            .filter(Expense.expense_date >= since)
+            .all()
+        )
+        totals: dict[str, list[float]] = {}
+        for name, amount, recurring in rows:
+            t = totals.setdefault(name, [0.0, 0.0])
+            t[0] += float(amount or 0)
+            if recurring:
+                t[1] += float(amount or 0)
+        items = []
+        for name, (total, recurring_total) in sorted(totals.items(), key=lambda kv: -kv[1][0]):
+            if total <= 0:
+                continue
+            lname = name.lower()
+            fixed = recurring_total >= total / 2 or any(h in lname for h in self._FIXED_HINTS)
+            items.append({"name": name, "monthly": round(total / months, 2), "fixed": fixed})
+        return items
+
     def run_monte_carlo(
         self,
         years: int = 10,
@@ -1261,6 +1343,9 @@ class AnalysisService:
         bucket_balances: dict[str, float] | None = None,   # taxable/traditional/roth $; auto-derived if None
         deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
         taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
+        inflation_rate: float = 0.0,                       # annual inflation (fraction); results in today's $
+        budget_items: list[dict] | None = None,            # itemised monthly spending → budget mode
+        reinvest_surplus: bool = False,                    # income above spending goes back into the portfolio
     ) -> MonteCarloComparison:
         """
         Run Monte Carlo simulation for current allocation and optionally target.
@@ -1288,7 +1373,8 @@ class AnalysisService:
         years = sc["years"]
         ca, ra, sca = sc["current_age"], sc["retirement_age"], sc["ssa_claiming_age"]
         ssa_fra_factor = sc["ssa_fra_factor"]
-        shared_kwargs = sc["shared_kwargs"]
+        shared_kwargs = {**sc["shared_kwargs"],
+                         **_spending_kwargs(inflation_rate, budget_items, reinvest_surplus)}
         monthly_contrib_float  = float(monthly_contribution)
         withdrawal_rate_float  = float(withdrawal_rate)
         withdrawal_years_int   = int(withdrawal_years)
@@ -1563,9 +1649,8 @@ class AnalysisService:
         self,
         *,
         final_vals,                       # (num_sims,) accumulation-ending values
-        annual_wdraw,                     # (num_sims,) Go-Go after-tax spend per sim
-        smile_mults,                      # (withdrawal_years,) spending-smile multipliers
-        ssa_per_year,                     # (withdrawal_years,) guaranteed income per year
+        spending_by_year,                 # (withdrawal_years,) after-tax spending need, nominal $
+        ssa_per_year,                     # (withdrawal_years,) guaranteed income per year, nominal $
         dist_gf,                          # (num_sims, withdrawal_years) growth factors
         bucket_balances: dict[str, float],
         deferred_tax_rate: float,
@@ -1574,6 +1659,9 @@ class AnalysisService:
         num_simulations: int,
         retirement_age: int | None,
         ssa_claiming_age: int | None,
+        price_by_year=None,               # (withdrawal_years,) price level per year (reporting in today's $)
+        end_price: float = 1.0,           # price level at the end of the plan
+        reinvest_surplus: bool = False,   # income above spending is added to the taxable bucket
     ) -> "tuple[np.ndarray, IncomeBridge, np.ndarray]":
         """Distribution phase with account-type buckets and ordered, taxed
         withdrawals — taxable → traditional → Roth.
@@ -1589,7 +1677,8 @@ class AnalysisService:
         Returns the per-year total-portfolio values (same shape the single-pooled
         path produces, so the fan chart and summary stats are unchanged), an
         IncomeBridge summary of medians answering "which accounts fund the
-        pre-SSA years", and each simulation's total net (after-tax) draw.
+        pre-SSA years", and each simulation's total net (after-tax) draw. All
+        reported dollar figures are in today's dollars (``price_by_year``).
         """
         def _d(x) -> Decimal:
             return Decimal(str(round(float(x), 2)))
@@ -1612,6 +1701,9 @@ class AnalysisService:
                  for b in order}
         buckets = {b: final_vals * props[b] for b in order}
 
+        price = (np.asarray(price_by_year, dtype=float) if price_by_year is not None
+                 else np.ones(withdrawal_years))
+        start_price = float(price[0]) if withdrawal_years else 1.0
         dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
         taxes_per_sim = np.zeros(num_simulations, dtype=float)
         net_drawn_per_sim = np.zeros(num_simulations, dtype=float)
@@ -1624,8 +1716,8 @@ class AnalysisService:
             for b in order:
                 buckets[b] = buckets[b] * dist_gf[:, y]
 
-            spending_need = annual_wdraw * smile_mults[y]                    # after-tax $ wanted
-            need = np.maximum(spending_need - ssa_per_year[y], 0.0)          # left after SSA
+            spending_need = float(spending_by_year[y])                       # after-tax $ wanted
+            need = np.full(num_simulations, max(spending_need - ssa_per_year[y], 0.0))  # left after SSA
 
             gross_by_src: dict[str, "np.ndarray"] = {}
             for b in order:
@@ -1634,27 +1726,30 @@ class AnalysisService:
                 gross_taken = np.minimum(buckets[b], gross_needed)
                 net_delivered = gross_taken * net_factor
                 buckets[b] = buckets[b] - gross_taken
-                taxes_per_sim += gross_taken - net_delivered
+                taxes_per_sim += (gross_taken - net_delivered) / price[y]
                 need = need - net_delivered
-                net_drawn_per_sim += net_delivered
+                net_drawn_per_sim += net_delivered / price[y]
                 gross_by_src[b] = gross_taken
 
+            if reinvest_surplus and ssa_per_year[y] > spending_need:
+                alive = (buckets["taxable"] + buckets["traditional"] + buckets["roth"]) > 0
+                buckets["taxable"] = buckets["taxable"] + np.where(alive, ssa_per_year[y] - spending_need, 0.0)
             dist_values[:, y] = buckets["taxable"] + buckets["traditional"] + buckets["roth"]
 
             # Per-bucket medians taken separately don't add up when simulations
             # draw from different buckets in the same year, so report the split
             # of the simulation whose total gross draw is the median.
             total_y = gross_by_src["taxable"] + gross_by_src["traditional"] + gross_by_src["roth"]
-            gross_by_year[:, y] = total_y
+            gross_by_year[:, y] = total_y / price[y]
             mid = int(np.argsort(total_y)[num_simulations // 2])
             age = (retirement_age + y) if retirement_age is not None else None
             funding_by_year.append(BridgeYearFunding(
                 year=y + 1,
                 age=age,
-                ssa=_d(ssa_per_year[y]),
-                taxable=_d(gross_by_src["taxable"][mid]),
-                traditional=_d(gross_by_src["traditional"][mid]),
-                roth=_d(gross_by_src["roth"][mid]),
+                ssa=_d(ssa_per_year[y] / price[y]),
+                taxable=_d(gross_by_src["taxable"][mid] / price[y]),
+                traditional=_d(gross_by_src["traditional"][mid] / price[y]),
+                roth=_d(gross_by_src["roth"][mid] / price[y]),
             ))
             for b in order:
                 if depletes_year[b] is None and props[b] > 0 and float(np.median(buckets[b])) <= 0.0:
@@ -1668,9 +1763,8 @@ class AnalysisService:
         bridge_years = first_ssa if first_ssa is not None else 0
 
         # Annual after-tax spend the portfolio covers in the first retirement year.
-        gap_annual = (float(np.median(np.maximum(
-            annual_wdraw * smile_mults[0] - ssa_per_year[0], 0.0)))
-            if withdrawal_years else 0.0)
+        gap_annual = (max(float(spending_by_year[0]) - float(ssa_per_year[0]), 0.0) / start_price
+                      if withdrawal_years else 0.0)
 
         # Total gross capital to fund the pre-SSA window = median across
         # simulations of each one's gross draws over the bridge years.
@@ -1686,8 +1780,8 @@ class AnalysisService:
             buckets_out.append(BridgeBucket(
                 bucket=b,
                 label=labels[b],
-                start_balance=_d(props[b] * float(np.median(final_vals))),
-                end_median=_d(np.median(buckets[b])),
+                start_balance=_d(props[b] * float(np.median(final_vals)) / start_price),
+                end_median=_d(np.median(buckets[b]) / end_price),
                 depletes_year=dy,
                 depletes_age=dage,
             ))
@@ -1695,7 +1789,7 @@ class AnalysisService:
         bridge = IncomeBridge(
             enabled=True,
             buckets=buckets_out,
-            total_start=_d(np.median(final_vals)),
+            total_start=_d(np.median(final_vals) / start_price),
             gap_annual=_d(gap_annual),
             bridge_years=bridge_years,
             bridge_number=_d(bridge_number),
@@ -1733,9 +1827,29 @@ class AnalysisService:
         bucket_balances: dict[str, float] | None = None,   # today's taxable/traditional/roth $ balances
         deferred_tax_rate: float = 0.18,                   # effective tax on tax-deferred withdrawals (fraction)
         taxable_tax_rate: float = 0.10,                    # effective cap-gains drag on taxable withdrawals (fraction)
+        inflation_rate: float = 0.0,                       # annual inflation (fraction); 0 = nominal model
+        spending_fixed_annual: float | None = None,        # budget mode: fixed costs, today's $/yr
+        spending_variable_annual: float | None = None,     # budget mode: variable costs, today's $/yr
+        spending_scale: float = 1.0,                       # multiplies the budget (max-spending solver)
+        reinvest_surplus: bool = False,                    # income above spending goes back into the portfolio
     ) -> MonteCarloResult:
         """
         Two-phase Monte Carlo: accumulation → distribution.
+
+        Inflation: returns are nominal. With ``inflation_rate`` > 0, spending and
+        Social Security (entered in today's dollars) grow with it — SSA gets the
+        same COLA — and every reported dollar figure is converted back to
+        today's dollars. At 0 the model is the original nominal one.
+
+        Spending: either a withdrawal RATE (year-one spending = rate × median
+        retirement balance, then growing with inflation; the smile scales all of
+        it) or a BUDGET of fixed + variable costs in today's dollars (fixed costs
+        stay level in real terms; the smile applies to the variable part only).
+
+        Surplus: in a year when Social Security exceeds the spending need, the
+        extra is ignored (not spent, not saved) unless ``reinvest_surplus``, in
+        which case it is added back to the portfolio (taxable bucket under the
+        income bridge).
 
         Accumulation phase  (years 1 … years)
         ─────────────────────────────────────
@@ -1771,6 +1885,11 @@ class AnalysisService:
         # Simulate: log-normal Geometric Brownian Motion (annual steps).
         rng = np.random.default_rng(seed=42)
         drift = _log_drift(port_mu, port_sigma)
+        infl = max(0.0, float(inflation_rate))
+
+        def _price(t: float) -> float:
+            """Price level t years from today (today = 1)."""
+            return (1.0 + infl) ** t
         # Shape: (num_simulations, years)
         log_returns = rng.normal(drift, port_sigma, size=(num_simulations, years))
 
@@ -1821,7 +1940,7 @@ class AnalysisService:
                 cumulative = np.cumprod(growth_factors, axis=1) * initial_value
 
             for y in range(years):
-                vals = cumulative[:, y]
+                vals = cumulative[:, y] / _price(y + 1)          # today's dollars
                 trajectories.append(SimulationOutcome(
                     year=y + 1,
                     p10=Decimal(str(round(float(np.percentile(vals, 10)), 2))),
@@ -1833,8 +1952,8 @@ class AnalysisService:
 
             final_vals = cumulative[:, -1]
         prob_goal = None
-        if goal_amount:
-            prob_goal = float(np.mean(final_vals >= goal_amount) * 100)
+        if goal_amount:   # the goal is in today's dollars
+            prob_goal = float(np.mean(final_vals / _price(years) >= goal_amount) * 100)
 
         # ── Distribution / withdrawal phase ───────────────────────────────────
         withdrawal_trajectories: list[SimulationOutcome] = []
@@ -1853,13 +1972,17 @@ class AnalysisService:
         net_draw_after_ssa_out: Decimal | None = None
         income_bridge_out: IncomeBridge | None = None
 
-        if withdrawal_rate > 0 and withdrawal_years > 0:
-            # One Go-Go spending amount for every simulation: the rate applied to
-            # the MEDIAN retirement balance. (Scaling each path's spending to its
-            # own balance hid all accumulation risk: a bad market just lowered
-            # spending instead of threatening survival.)
-            annual_wdraw = np.full(num_simulations,
-                                   float(np.median(final_vals)) * (withdrawal_rate / 100.0))
+        budget_mode = (spending_fixed_annual is not None or spending_variable_annual is not None)
+        fixed_real = max(0.0, float(spending_fixed_annual or 0.0)) * spending_scale
+        variable_real = max(0.0, float(spending_variable_annual or 0.0)) * spending_scale
+        implied_rate_out: Decimal | None = None
+        if budget_mode and fixed_real + variable_real <= 0:
+            budget_mode = False
+
+        if (withdrawal_rate > 0 or budget_mode) and withdrawal_years > 0:
+            # One spending schedule for every simulation (scaling each path's
+            # spending to its own balance would hide accumulation risk).
+            median_final = float(np.median(final_vals))
 
             # ── Spending Smile: build per-year multipliers ────────────────────
             # Split distribution years into thirds: Go-Go (1.0×) → Slow-Go → No-Go.
@@ -1878,6 +2001,16 @@ class AnalysisService:
                         smile_mults[y] = smile_slow_pct / 100.0
                     else:
                         smile_mults[y] = smile_no_pct / 100.0
+
+            # Price level during each retirement year, and that year's spending
+            # need in nominal dollars (what the portfolio actually has to pay).
+            price_by_year = np.array([_price(years + y) for y in range(withdrawal_years)])
+            if budget_mode:
+                need_real = fixed_real + variable_real * smile_mults        # smile on variable only
+            else:
+                year1_nominal = median_final * (withdrawal_rate / 100.0)
+                need_real = (year1_nominal / _price(years)) * smile_mults   # level real spending × smile
+            need_nominal = need_real * price_by_year
 
             # Fresh base-case growth factors for the distribution phase. The
             # regime window is the first 2 years of the whole simulation, so a
@@ -1902,7 +2035,7 @@ class AnalysisService:
             # need and the portfolio only draws the remaining gap. The per-year
             # schedule is supplied by run_monte_carlo (one or two earners); the
             # scalar fallback keeps direct _simulate callers (and tests) working.
-            ssa_per_year = np.zeros(withdrawal_years)
+            ssa_per_year = np.zeros(withdrawal_years)       # today's dollars, as entered
             if ssa_schedule is not None:
                 arr = np.asarray(ssa_schedule, dtype=float)
                 ssa_per_year[:len(arr)] = arr[:withdrawal_years]
@@ -1914,6 +2047,8 @@ class AnalysisService:
                 for y in range(withdrawal_years):
                     if retirement_age + y >= ssa_claiming_age:
                         ssa_per_year[y] = ssa_annual_benefit
+
+            ssa_nominal = ssa_per_year * price_by_year      # benefits get the same COLA
 
             # Bucket balances must be present and positive for the bridge to run.
             bridge_active = (
@@ -1929,9 +2064,11 @@ class AnalysisService:
                 # the household's *after-tax* spending need.
                 dist_values, income_bridge_out, drawn_per_sim = self._run_income_bridge(
                     final_vals=final_vals,
-                    annual_wdraw=annual_wdraw,
-                    smile_mults=smile_mults,
-                    ssa_per_year=ssa_per_year,
+                    reinvest_surplus=reinvest_surplus,
+                    spending_by_year=need_nominal,
+                    price_by_year=price_by_year,
+                    end_price=_price(years + withdrawal_years),
+                    ssa_per_year=ssa_nominal,
                     dist_gf=dist_gf,
                     bucket_balances=bucket_balances,
                     deferred_tax_rate=deferred_tax_rate,
@@ -1946,30 +2083,33 @@ class AnalysisService:
                 dist_values = np.empty((num_simulations, withdrawal_years), dtype=float)
                 drawn_per_sim = np.zeros(num_simulations)
                 for y in range(withdrawal_years):
-                    # End-of-year: portfolio grows first; the smile-adjusted spending
-                    # need is met from SSA first, then the portfolio covers the rest.
-                    spending_need  = annual_wdraw * smile_mults[y]                  # per-sim ($)
-                    portfolio_draw = np.maximum(spending_need - ssa_per_year[y], 0.0)
+                    # End-of-year: portfolio grows first; the year's spending need
+                    # is met from SSA first, then the portfolio covers the rest.
+                    portfolio_draw = max(need_nominal[y] - ssa_nominal[y], 0.0)
+                    surplus = max(ssa_nominal[y] - need_nominal[y], 0.0) if reinvest_surplus else 0.0
                     grown = port_d * dist_gf[:, y]
-                    drawn_per_sim += np.minimum(grown, portfolio_draw)              # what was actually paid
+                    drawn_per_sim += np.minimum(grown, portfolio_draw) / price_by_year[y]   # today's $
                     port_d = np.maximum(grown - portfolio_draw, 0.0)
+                    if surplus:
+                        port_d = np.where(port_d > 0, port_d + surplus, 0.0)   # ruin stays ruin
                     dist_values[:, y] = port_d
 
             # First point: retirement starting value = end of accumulation.
             # This anchors the orange distribution fan to the exact point where
             # the blue accumulation fan ends, so the chart shows a clear kink
             # when contributions stop and withdrawals begin.
+            start_real = final_vals / _price(years)
             withdrawal_trajectories.append(SimulationOutcome(
                 year=years,  # same index as last accumulation year
-                p10=Decimal(str(round(float(np.percentile(final_vals, 10)), 2))),
-                p25=Decimal(str(round(float(np.percentile(final_vals, 25)), 2))),
-                median=Decimal(str(round(float(np.median(final_vals)), 2))),
-                p75=Decimal(str(round(float(np.percentile(final_vals, 75)), 2))),
-                p90=Decimal(str(round(float(np.percentile(final_vals, 90)), 2))),
+                p10=Decimal(str(round(float(np.percentile(start_real, 10)), 2))),
+                p25=Decimal(str(round(float(np.percentile(start_real, 25)), 2))),
+                median=Decimal(str(round(float(np.median(start_real)), 2))),
+                p75=Decimal(str(round(float(np.percentile(start_real, 75)), 2))),
+                p90=Decimal(str(round(float(np.percentile(start_real, 90)), 2))),
             ))
 
             for y in range(withdrawal_years):
-                vals_d = dist_values[:, y]
+                vals_d = dist_values[:, y] / _price(years + y + 1)        # today's dollars
                 withdrawal_trajectories.append(SimulationOutcome(
                     year=years + y + 1,   # continues year-count from accumulation
                     p10=Decimal(str(round(float(np.percentile(vals_d, 10)), 2))),
@@ -1979,9 +2119,12 @@ class AnalysisService:
                     p90=Decimal(str(round(float(np.percentile(vals_d, 90)), 2))),
                 ))
 
-            med_wdraw = float(np.median(annual_wdraw))
-            final_d   = dist_values[:, -1]
+            med_wdraw = float(need_real[0])                 # year-one spending, today's $
+            final_d   = dist_values[:, -1] / _price(years + withdrawal_years)
             survival  = float(np.mean(final_d > 0) * 100)
+            # Year-one spending as a share of the median retirement balance.
+            if median_final > 0:
+                implied_rate_out = Decimal(str(round(need_nominal[0] / median_final * 100, 2)))
 
             # Total actually drawn from the portfolio (median across sims): net of
             # the spending Social Security covered, and stopping at depletion.
@@ -2015,14 +2158,20 @@ class AnalysisService:
             num_simulations=num_simulations,
             years=years,
             trajectories=trajectories,
-            final_median=Decimal(str(round(float(np.median(final_vals)), 2))),
-            final_p10=Decimal(str(round(float(np.percentile(final_vals, 10)), 2))),
-            final_p90=Decimal(str(round(float(np.percentile(final_vals, 90)), 2))),
+            final_median=Decimal(str(round(float(np.median(final_vals)) / _price(years), 2))),
+            final_p10=Decimal(str(round(float(np.percentile(final_vals, 10)) / _price(years), 2))),
+            final_p90=Decimal(str(round(float(np.percentile(final_vals, 90)) / _price(years), 2))),
             probability_of_goal=Decimal(str(round(prob_goal, 1))) if prob_goal is not None else None,
             goal_amount=Decimal(str(goal_amount)) if goal_amount else None,
             regime_context=regime_context,
             monthly_contribution=Decimal(str(round(monthly_contribution, 2))),
-            withdrawal_rate=Decimal(str(round(withdrawal_rate, 2))),
+            withdrawal_rate=(implied_rate_out if budget_mode and implied_rate_out is not None
+                             else Decimal(str(round(withdrawal_rate, 2)))),
+            inflation_rate=Decimal(str(round(infl * 100, 2))),
+            spending_mode="budget" if budget_mode else "rate",
+            spending_fixed_monthly=(Decimal(str(round(fixed_real / 12, 2))) if budget_mode else None),
+            spending_variable_monthly=(Decimal(str(round(variable_real / 12, 2))) if budget_mode else None),
+            implied_withdrawal_rate=implied_rate_out,
             withdrawal_years=withdrawal_years,
             withdrawal_trajectories=withdrawal_trajectories,
             withdrawal_annual_amount=withdrawal_annual_amount,

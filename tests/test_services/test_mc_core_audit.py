@@ -108,8 +108,7 @@ def test_bridge_capital_is_median_of_per_sim_totals():
     # at different times; no tax, no growth. Every sim draws $300 in total.
     _, bridge, net = _svc()._run_income_bridge(
         final_vals=np.array([300.0, 300.0, 300.0]),
-        annual_wdraw=np.array([100.0, 100.0, 100.0]),
-        smile_mults=np.ones(4), ssa_per_year=np.array([0.0, 0.0, 0.0, 1000.0]),
+        spending_by_year=np.full(4, 100.0), ssa_per_year=np.array([0.0, 0.0, 0.0, 1000.0]),
         dist_gf=np.ones((3, 4)),
         bucket_balances={"taxable": 1.0, "traditional": 1.0, "roth": 1.0},
         deferred_tax_rate=0.0, taxable_tax_rate=0.0, withdrawal_years=4,

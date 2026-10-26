@@ -195,6 +195,11 @@ class MonteCarloResult(BaseModel):
     withdrawal_rate: Decimal = Decimal("0")         # annual % of retirement-date portfolio
     withdrawal_years: int = 0                       # how many years the distribution phase runs
     withdrawal_trajectories: list["SimulationOutcome"] = []  # per-year in distribution phase
+    inflation_rate: Decimal = Decimal("0")           # % per year; dollar figures are in today's dollars
+    spending_mode: str = "rate"                      # "rate" (withdrawal %) or "budget" (fixed + variable costs)
+    spending_fixed_monthly: Decimal | None = None    # budget mode, today's $
+    spending_variable_monthly: Decimal | None = None # budget mode, today's $
+    implied_withdrawal_rate: Decimal | None = None   # year-one spending ÷ median retirement balance (%)
     withdrawal_annual_amount: Decimal | None = None  # median Go-Go annual withdrawal (initial rate)
     withdrawal_total: Decimal | None = None          # median total withdrawn (smile-adjusted)
     withdrawal_final_median: Decimal | None = None   # median portfolio at end of distribution
@@ -314,6 +319,10 @@ class MaxSpendingResult(BaseModel):
     withdrawal_years: int = 0
     target_reachable: bool = True            # False → even ~0% spending misses the target
     income_bridge: bool = False              # solved with account sequencing + taxes
+    spending_mode: str = "rate"              # budget mode solves for a scale of your budget
+    budget_monthly: Decimal | None = None    # your current budget, today's $/mo (budget mode)
+    budget_pct_of_max: Decimal | None = None # your budget as a % of the max sustainable spending
+    inflation_rate: Decimal = Decimal("0")   # % per year; amounts are in today's dollars
 
 
 class MonteCarloComparison(BaseModel):
