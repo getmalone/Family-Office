@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     # LLM
     anthropic_api_key: str = ""
+    anthropic_workspace_id: str = ""   # needed only for org keys not scoped to a workspace (wrkspc_…)
     openai_api_key: str = ""
     llm_provider: str = "anthropic"
     llm_model: str = "claude-sonnet-4-20250514"
