@@ -344,7 +344,7 @@ wheels = [
 
 [[package]]
 name = "family-office"
-version = "0.1.32"
+version = "0.1.33"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

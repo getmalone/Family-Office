@@ -1095,6 +1095,7 @@ class AnalysisService:
         inflation_rate: float = 0.0,
         budget_items: list[dict] | None = None,
         reinvest_surplus: bool = False,
+        taxable_basis: float | None = None,
         target_survival: float = 85.0,
         max_rate: float = 20.0,
     ) -> "MaxSpendingResult":
@@ -1116,6 +1117,7 @@ class AnalysisService:
             spouse_current_age=spouse_current_age, spouse_fra_age=spouse_fra_age,
             income_bridge=income_bridge, bucket_balances=bucket_balances,
             deferred_tax_rate=deferred_tax_rate, taxable_tax_rate=taxable_tax_rate,
+            taxable_basis=taxable_basis,
         )
         wy = int(withdrawal_years)
         target = float(target_survival)
@@ -1203,6 +1205,7 @@ class AnalysisService:
         bucket_balances: dict[str, float] | None,
         deferred_tax_rate: float,
         taxable_tax_rate: float,
+        taxable_basis: float | None = None,
     ) -> dict:
         """Everything a Monte Carlo run needs besides the allocation and the
         withdrawal rate: starting value, regime, timeline, household SSA
@@ -1262,6 +1265,10 @@ class AnalysisService:
             bucket_balances = {
                 k: float(v) for k, v in self.portfolio_svc.get_tax_bucket_balances().items()
             }
+            # Real accounts: the taxable bucket's cost basis comes from the tax
+            # lots (unless one was entered), so only gains are taxed on sales.
+            if taxable_basis is None:
+                taxable_basis = float(self.portfolio_svc.get_taxable_cost_basis())
         # The bridge models the portfolio AS the sum of its buckets. For the
         # auto-derived path that already equals total market value; for manual
         # overrides it lets entered balances drive the scale (e.g. before the
@@ -1277,6 +1284,7 @@ class AnalysisService:
             bucket_balances=bucket_balances,
             deferred_tax_rate=deferred_tax_rate,
             taxable_tax_rate=taxable_tax_rate,
+            taxable_basis=taxable_basis if income_bridge else None,
         )
         return dict(
             initial_value=initial_value, regime=portfolio_regime, allocation=current_alloc,
@@ -1346,6 +1354,7 @@ class AnalysisService:
         inflation_rate: float = 0.0,                       # annual inflation (fraction); results in today's $
         budget_items: list[dict] | None = None,            # itemised monthly spending → budget mode
         reinvest_surplus: bool = False,                    # income above spending goes back into the portfolio
+        taxable_basis: float | None = None,                # taxable bucket cost basis ($); None = from the lots
     ) -> MonteCarloComparison:
         """
         Run Monte Carlo simulation for current allocation and optionally target.
@@ -1366,6 +1375,7 @@ class AnalysisService:
             spouse_current_age=spouse_current_age, spouse_fra_age=spouse_fra_age,
             income_bridge=income_bridge, bucket_balances=bucket_balances,
             deferred_tax_rate=deferred_tax_rate, taxable_tax_rate=taxable_tax_rate,
+            taxable_basis=taxable_basis,
         )
         initial_value = sc["initial_value"]
         portfolio_regime = sc["regime"]
@@ -1662,6 +1672,8 @@ class AnalysisService:
         price_by_year=None,               # (withdrawal_years,) price level per year (reporting in today's $)
         end_price: float = 1.0,           # price level at the end of the plan
         reinvest_surplus: bool = False,   # income above spending is added to the taxable bucket
+        taxable_basis: float | None = None,  # taxable bucket's cost basis at retirement (nominal $);
+                                             # None = unknown → treat every dollar sold as gain
     ) -> "tuple[np.ndarray, IncomeBridge, np.ndarray]":
         """Distribution phase with account-type buckets and ordered, taxed
         withdrawals — taxable → traditional → Roth.
@@ -1700,6 +1712,15 @@ class AnalysisService:
                      if start_total > 0 else 0.0)
                  for b in order}
         buckets = {b: final_vals * props[b] for b in order}
+        # Taxable bucket cost basis per simulation. Selling is average-cost: a
+        # sale of G from value V with basis B realizes a gain of G·(1 − B/V)
+        # and reduces the basis by G·B/V. Only the gain is taxed. Growth adds
+        # gain, not basis; reinvested surplus adds both.
+        basis_known = taxable_basis is not None
+        basis = np.minimum(buckets["taxable"], max(0.0, float(taxable_basis or 0.0)))
+        gain_share_start = (float(np.median(np.where(buckets["taxable"] > 0,
+                                                     1 - basis / np.maximum(buckets["taxable"], 1e-9), 0.0)))
+                            if basis_known and props["taxable"] > 0 else None)
 
         price = (np.asarray(price_by_year, dtype=float) if price_by_year is not None
                  else np.ones(withdrawal_years))
@@ -1721,9 +1742,17 @@ class AnalysisService:
 
             gross_by_src: dict[str, "np.ndarray"] = {}
             for b in order:
-                net_factor = 1.0 - rates[b]
-                gross_needed = need / net_factor if net_factor > 0 else need
-                gross_taken = np.minimum(buckets[b], gross_needed)
+                if b == "taxable" and basis_known:
+                    value = buckets[b]
+                    basis_frac = np.where(value > 0, np.clip(basis / np.maximum(value, 1e-9), 0, 1), 0.0)
+                    net_factor = 1.0 - rates[b] * (1.0 - basis_frac)        # tax only the gain share
+                    gross_needed = need / net_factor
+                    gross_taken = np.minimum(value, gross_needed)
+                    basis = basis - gross_taken * basis_frac
+                else:
+                    net_factor = 1.0 - rates[b]
+                    gross_needed = need / net_factor if net_factor > 0 else need
+                    gross_taken = np.minimum(buckets[b], gross_needed)
                 net_delivered = gross_taken * net_factor
                 buckets[b] = buckets[b] - gross_taken
                 taxes_per_sim += (gross_taken - net_delivered) / price[y]
@@ -1733,7 +1762,9 @@ class AnalysisService:
 
             if reinvest_surplus and ssa_per_year[y] > spending_need:
                 alive = (buckets["taxable"] + buckets["traditional"] + buckets["roth"]) > 0
-                buckets["taxable"] = buckets["taxable"] + np.where(alive, ssa_per_year[y] - spending_need, 0.0)
+                added = np.where(alive, ssa_per_year[y] - spending_need, 0.0)
+                buckets["taxable"] = buckets["taxable"] + added
+                basis = basis + added                                       # new money is all basis
             dist_values[:, y] = buckets["taxable"] + buckets["traditional"] + buckets["roth"]
 
             # Per-bucket medians taken separately don't add up when simulations
@@ -1796,6 +1827,7 @@ class AnalysisService:
             bridge_coverage_pct=_d(bridge_coverage),
             deferred_tax_rate=_d(rates["traditional"] * 100.0),
             taxable_tax_rate=_d(rates["taxable"] * 100.0),
+            taxable_gain_share_pct=(_d(gain_share_start * 100.0) if gain_share_start is not None else None),
             taxes_total_median=_d(np.median(taxes_per_sim)),
             funding_by_year=funding_by_year,
         )
@@ -1832,6 +1864,7 @@ class AnalysisService:
         spending_variable_annual: float | None = None,     # budget mode: variable costs, today's $/yr
         spending_scale: float = 1.0,                       # multiplies the budget (max-spending solver)
         reinvest_surplus: bool = False,                    # income above spending goes back into the portfolio
+        taxable_basis: float | None = None,                # taxable bucket cost basis today ($); None = unknown
     ) -> MonteCarloResult:
         """
         Two-phase Monte Carlo: accumulation → distribution.
@@ -2062,8 +2095,17 @@ class AnalysisService:
                 # with a simple effective-tax gross-up. Answers "which accounts
                 # fund the pre-SSA years". Treats the smile-adjusted withdrawal as
                 # the household's *after-tax* spending need.
+                # Basis at retirement: today's basis plus the taxable bucket's
+                # share of contributions (new money is all basis).
+                basis_at_retirement = None
+                if taxable_basis is not None:
+                    bal_total = sum(max(0.0, float(v)) for v in bucket_balances.values())
+                    taxable_share = max(0.0, float(bucket_balances.get("taxable", 0.0))) / bal_total
+                    basis_at_retirement = (float(taxable_basis)
+                                           + taxable_share * monthly_contribution * 12.0 * years)
                 dist_values, income_bridge_out, drawn_per_sim = self._run_income_bridge(
                     final_vals=final_vals,
+                    taxable_basis=basis_at_retirement,
                     reinvest_surplus=reinvest_surplus,
                     spending_by_year=need_nominal,
                     price_by_year=price_by_year,

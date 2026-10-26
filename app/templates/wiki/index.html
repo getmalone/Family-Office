@@ -1178,8 +1178,13 @@ for y in range(withdrawal_years):
   <p>Opt-in (<code>income_bridge=true</code>; defaults off so the pooled model above is unchanged), <code>_run_income_bridge()</code> answers <em>which accounts fund the pre-SSA years</em>. It splits the portfolio into three tax buckets via <code>account.tax_bucket_for()</code> — <strong>taxable</strong> (brokerage / trust / bank), <strong>tax-deferred</strong> (traditional IRA, 401k) and <strong>tax-free</strong> (Roth, HSA, 529) — and draws each year's net spending need (after Social Security) in order <strong>taxable → tax-deferred → Roth</strong>, with a simple effective-tax gross-up:</p>
   <pre><code>need = max(spending_need - ssa, 0)          # after-tax dollars the portfolio must deliver
 for bucket in (taxable, traditional, roth):  # in order
-    gross = min(bucket, need / (1 - rate))   # gross-up: tax-deferred ~18%, taxable ~10%, Roth 0%
-    bucket -= gross;  need -= gross * (1 - rate)</code></pre>
+    eff = rate                               # tax-deferred ~18%, Roth 0%
+    if bucket is taxable and basis known:    # only the gain part of a sale is taxed
+        eff = cg_rate * (1 - basis / bucket)  # average-cost selling
+    gross = min(bucket, need / (1 - eff))
+    basis -= gross * basis / bucket          # (taxable only)
+    bucket -= gross;  need -= gross * (1 - eff)</code></pre>
+  <p>The taxable bucket's cost basis comes from the tax lots in taxable accounts (<code>get_taxable_cost_basis()</code>), or <code>bucket_taxable_basis</code> when balances are entered by hand; contributions during accumulation add basis, growth adds gain, and reinvested surplus adds basis. With manual balances and no basis, every taxable dollar is treated as gain (the old, conservative behaviour). <code>taxable_tax_rate</code> is the capital-gains rate on the gain part (default 15%).</p>
   <p>Surfaced via the <code>IncomeBridge</code> schema and a violet "Income Bridge — drawdown order" panel: the annual <strong>Gap</strong> (spend the portfolio covers pre-SSA), the <strong>Bridge number</strong> (gross capital for the pre-SSA window), per-bucket start balances + depletion age, lifetime taxes, and bridge coverage %. API params: <code>income_bridge</code>, <code>deferred_tax_rate</code> / <code>taxable_tax_rate</code> (percent), and optional <code>bucket_taxable</code> / <code>bucket_traditional</code> / <code>bucket_roth</code> overrides (when supplied they drive the portfolio scale, useful before the real accounts are loaded).</p>
 
   <h4>Max Sustainable Spending</h4>

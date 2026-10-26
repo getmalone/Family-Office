@@ -19,7 +19,7 @@
                   ['goal','monthly_contribution','withdrawal_rate',
                    'current_age','retirement_age','ssa_monthly',
                    'spouse_current_age','spouse_claiming_age','spouse_monthly',
-                   'bucket_taxable','bucket_traditional','bucket_roth'].forEach(function(n){
+                   'bucket_taxable','bucket_traditional','bucket_roth','bucket_taxable_basis'].forEach(function(n){
                       var el=f.elements[n]; if(el && !el.value.trim()) el.disabled=true;
                   });
               })(this)">
@@ -355,8 +355,9 @@
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-36">
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700">Taxable Rate (%)
-              <span class="text-gray-400 font-normal text-xs ml-1">cap-gains drag</span></label>
+            <label class="block text-sm font-medium text-gray-700"
+                   title="Long-term capital-gains rate (plus NIIT/state if they apply). Charged only on the gain part of each taxable sale; the cost basis comes back tax-free.">Cap-Gains Rate (%)
+              <span class="text-gray-400 font-normal text-xs ml-1">on gains only</span></label>
             <input type="number" name="taxable_tax_rate" form="mc-form"
                    value="{{ taxable_tax_rate | int }}" min="0" max="50" step="1"
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-36">
@@ -367,6 +368,14 @@
               <span class="text-gray-400 font-normal text-xs">override</span></label>
             <input type="number" name="bucket_taxable" form="mc-form"
                    value="{{ bucket_taxable or '' }}" min="0" step="10000" placeholder="auto from accounts"
+                   class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700"
+                   title="What you paid for the taxable holdings. Only value above this is a taxable gain when sold. Blank = from your accounts' tax lots (or, with a manual Taxable $, every dollar is treated as gain).">Taxable cost basis $
+              <span class="text-gray-400 font-normal text-xs">override</span></label>
+            <input type="number" name="bucket_taxable_basis" form="mc-form"
+                   value="{{ bucket_taxable_basis or '' }}" min="0" step="10000" placeholder="auto from tax lots"
                    class="mt-1 rounded-md border px-3 py-2 text-sm w-44">
           </div>
           <div>
@@ -442,7 +451,7 @@
       ['smile_slow_pct','smile_no_pct','monthly_contribution','regime_override',
        'years','current_age','retirement_age','ssa_claiming_age','ssa_monthly','fra_age',
        'spouse_monthly','spouse_claiming_age','spouse_current_age','spouse_fra_age',
-       'deferred_tax_rate','taxable_tax_rate','bucket_taxable','bucket_traditional','bucket_roth',
+       'deferred_tax_rate','taxable_tax_rate','bucket_taxable','bucket_traditional','bucket_roth','bucket_taxable_basis',
        'inflation_rate','budget_buffer'].forEach(n => {
         if (g(n)) p.set(n, g(n));
       });
@@ -734,7 +743,9 @@
           <div class="text-xs mt-2
             {% if ib.bridge_coverage_pct >= 90 %}text-emerald-600{% elif ib.bridge_coverage_pct >= 70 %}text-amber-600{% else %}text-red-600{% endif %}">
             {{ ib.bridge_coverage_pct }}% of simulations fund the full pre-SSA bridge without depleting · taxes at
-            {{ ib.deferred_tax_rate | int }}% deferred / {{ ib.taxable_tax_rate | int }}% taxable.
+            {{ ib.deferred_tax_rate | int }}% deferred /
+            {% if ib.taxable_gain_share_pct is not none %}{{ ib.taxable_tax_rate | int }}% on gains (≈{{ ib.taxable_gain_share_pct | round | int }}% of the taxable account is gain at retirement; the basis comes back tax-free).
+            {% else %}{{ ib.taxable_tax_rate | int }}% on every taxable dollar sold (cost basis unknown — enter it to tax only the gains).{% endif %}
           </div>
         </div>
         {% endif %}

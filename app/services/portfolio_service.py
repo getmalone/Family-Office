@@ -525,6 +525,22 @@ class PortfolioService:
             balances[bucket] += h.market_value
         return balances
 
+    def get_taxable_cost_basis(self) -> Decimal:
+        """Total cost basis of holdings in taxable-bucket accounts (cash at
+        book, so it has no gain). Seeds the Income Bridge's capital-gains math:
+        only the gain part of a taxable withdrawal is taxed."""
+        total = Decimal("0")
+        bucket_of: dict[int, str] = {}
+        for h in self.get_summary().holdings:
+            bucket = bucket_of.get(h.account_id)
+            if bucket is None:
+                account = self.session.get(Account, h.account_id)
+                bucket = tax_bucket_for(account.account_type) if account else "taxable"
+                bucket_of[h.account_id] = bucket
+            if bucket == "taxable":
+                total += h.cost_basis
+        return total
+
     def delete_position(self, asset_id: int, account_id: int) -> int:
         """
         Delete all open tax lots for a position. Returns count of lots removed.
